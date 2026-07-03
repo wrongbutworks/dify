@@ -292,10 +292,10 @@ class DifyPreparedLLM(LLMProtocol):
 class DifyPreparedPollingLLM(DifyPreparedLLM, LLMPollingCapableProtocol):
     """Prepared workflow LLM adapter that exposes Graphon's polling protocol."""
 
-    def __init__(self, model_instance: ModelInstance) -> None:
+    def __init__(self, model_instance: ModelInstance, before_invoke: BeforeLLMInvoke | None = None) -> None:
         from core.plugin.impl.model_runtime import PluginModelRuntime
 
-        super().__init__(model_instance)
+        super().__init__(model_instance, before_invoke=before_invoke)
         model_type_instance = model_instance.model_type_instance
         if not isinstance(model_type_instance, LargeLanguageModel):
             raise TypeError("Polling wrapper requires a large-language-model instance.")
@@ -316,6 +316,7 @@ class DifyPreparedPollingLLM(DifyPreparedLLM, LLMPollingCapableProtocol):
         stop: Sequence[str] | None,
         json_schema: Mapping[str, Any] | None,
     ) -> LLMPollingResult:
+        self._run_before_invoke(prompt_messages)
         return self._plugin_model_runtime.start_llm_polling(
             provider=self.provider,
             model=self.model_name,
