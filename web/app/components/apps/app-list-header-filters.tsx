@@ -1,16 +1,21 @@
 'use client'
 
+import type { GetAppsData } from '@dify/contracts/api/console/apps/types.gen'
 import type { AppListCategory } from './app-type-filter-shared'
-import type { AppListSortBy } from '@/contract/console/apps'
 import { Button } from '@langgenius/dify-ui/button'
 import { cn } from '@langgenius/dify-ui/cn'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@langgenius/dify-ui/dropdown-menu'
 import { useTranslation } from 'react-i18next'
 import { SearchInput } from '@/app/components/base/search-input'
+import { getStepByStepTourDropdownMenuContentProps } from '@/app/components/step-by-step-tour/dropdown-menu'
 import { TagFilter } from '@/features/tag-management/components/tag-filter'
+import Link from '@/next/link'
 import { AppSortFilter } from './app-sort-filter'
 import { AppTypeFilter } from './app-type-filter'
 import CreatorsFilter from './creators-filter'
+
+type AppListQuery = NonNullable<GetAppsData['query']>
+type AppListSortBy = NonNullable<AppListQuery['sort_by']>
 
 type AppListHeaderFiltersProps = {
   category: AppListCategory
@@ -28,6 +33,9 @@ type AppListHeaderFiltersProps = {
   onImportDSL: () => void
   onOpenTagManagement: () => void
   showCreateButton: boolean
+  stepByStepTourCreateMenuOpen?: boolean
+  stepByStepTourCreateMenuTarget?: string
+  stepByStepTourCreateMenuHighlightPart?: string
 }
 
 export function AppListHeaderFilters({
@@ -46,12 +54,21 @@ export function AppListHeaderFilters({
   onImportDSL,
   onOpenTagManagement,
   showCreateButton,
+  stepByStepTourCreateMenuOpen,
+  stepByStepTourCreateMenuTarget,
+  stepByStepTourCreateMenuHighlightPart,
 }: AppListHeaderFiltersProps) {
   const { t } = useTranslation()
+  const createMenuOpenProps = stepByStepTourCreateMenuOpen === undefined
+    ? {}
+    : {
+        open: stepByStepTourCreateMenuOpen,
+        onOpenChange: () => {},
+      }
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <div className="flex min-w-0 items-center gap-2">
+    <div className="flex flex-wrap items-start justify-between gap-2">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
         <AppTypeFilter value={category} onChange={onCategoryChange} />
         <TagFilter
           type="app"
@@ -59,25 +76,33 @@ export function AppListHeaderFilters({
           onChange={onTagIDsChange}
           onOpenTagManagement={onOpenTagManagement}
           showLeadingIcon={false}
+          triggerClassName="min-w-0"
         />
         <CreatorsFilter value={creatorIDs} onChange={onCreatorIDsChange} />
-        <AppSortFilter value={sortBy} onChange={onSortByChange} />
         <SearchInput
-          className="w-50"
+          className="w-50 max-w-full"
           value={keywords}
           onValueChange={onKeywordsChange}
           aria-label={t('gotoAnything.actions.searchApplications', { ns: 'app' })}
         />
       </div>
-      <div className="flex items-center gap-2">
+      <div className="ml-auto flex max-w-full min-w-0 flex-wrap items-center justify-end gap-2">
+        <AppSortFilter value={sortBy} onChange={onSortByChange} />
+        <Link
+          href="/snippets"
+          className="flex h-8 items-center rounded-lg px-3 text-sm font-semibold whitespace-nowrap text-text-secondary outline-hidden hover:bg-state-base-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-state-accent-solid"
+        >
+          {t('studio.viewSnippets', { ns: 'app' })}
+        </Link>
         {showCreateButton && (
-          <DropdownMenu modal={false}>
+          <DropdownMenu modal={false} {...createMenuOpenProps}>
             <DropdownMenuTrigger
               render={(
                 <Button
+                  data-step-by-step-tour-target={stepByStepTourCreateMenuTarget}
                   variant="primary"
                   size="medium"
-                  className="gap-0.5 px-2 shadow-xs shadow-shadow-shadow-3"
+                  className="gap-0.5 px-2 whitespace-nowrap shadow-xs shadow-shadow-shadow-3"
                 >
                   <span aria-hidden className="i-ri-add-line size-4 shrink-0" />
                   <span className="pl-1">{t('operation.create', { ns: 'common' })}</span>
@@ -88,7 +113,11 @@ export function AppListHeaderFilters({
             <DropdownMenuContent
               placement="bottom-end"
               sideOffset={4}
-              popupClassName="w-70 p-0"
+              {...getStepByStepTourDropdownMenuContentProps({
+                highlightPart: stepByStepTourCreateMenuHighlightPart,
+                popupClassName: 'w-70 p-0',
+                presentationOnly: Boolean(stepByStepTourCreateMenuOpen),
+              })}
             >
               <div className="py-1">
                 <DropdownMenuItem

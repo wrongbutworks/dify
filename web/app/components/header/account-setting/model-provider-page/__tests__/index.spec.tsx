@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { act, fireEvent, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderWithSystemFeatures } from '@/__tests__/utils/mock-system-features'
+import { getStepByStepTourTargetSelector, STEP_BY_STEP_TOUR_TARGETS } from '@/app/components/step-by-step-tour/target-registry'
 import {
   CurrentSystemQuotaTypeEnum,
   CustomConfigurationStatusEnum,
@@ -163,6 +164,9 @@ vi.mock('@/service/use-plugins', () => ({
   useInstalledPluginList: () => ({
     data: { plugins: [] },
   }),
+  useCheckInstalled: () => ({
+    data: { plugins: [] },
+  }),
   usePluginAutoUpgradeSettings: () => ({
     data: mockReferenceSetting.auto_upgrade
       ? {
@@ -230,25 +234,40 @@ vi.mock('@/app/components/base/date-and-time-picker/time-picker', () => ({
 
 vi.mock('@/service/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/service/client')>()
-  const originalPlugins = actual.consoleQuery.plugins as unknown as Record<string, unknown>
+  const originalWorkspaces = actual.consoleQuery.workspaces
   return {
     ...actual,
     consoleQuery: new Proxy(actual.consoleQuery, {
       get(target, prop) {
-        if (prop === 'plugins') {
+        if (prop === 'workspaces') {
           return {
-            ...originalPlugins,
-            checkInstalled: {
-              queryOptions: () => ({
-                queryKey: ['plugins', 'checkInstalled'],
-                queryFn: () => new Promise(() => {}),
-              }),
-            },
-            latestVersions: {
-              queryOptions: () => ({
-                queryKey: ['plugins', 'latestVersions'],
-                queryFn: () => new Promise(() => {}),
-              }),
+            ...originalWorkspaces,
+            current: {
+              ...originalWorkspaces.current,
+              plugin: {
+                ...originalWorkspaces.current.plugin,
+                list: {
+                  ...originalWorkspaces.current.plugin.list,
+                  installations: {
+                    ids: {
+                      post: {
+                        queryOptions: () => ({
+                          queryKey: ['workspaces', 'current', 'plugin', 'list', 'installations', 'ids', 'post'],
+                          queryFn: () => new Promise(() => {}),
+                        }),
+                      },
+                    },
+                  },
+                  latestVersions: {
+                    post: {
+                      queryOptions: () => ({
+                        queryKey: ['workspaces', 'current', 'plugin', 'list', 'latestVersions', 'post'],
+                        queryFn: () => new Promise(() => {}),
+                      }),
+                    },
+                  },
+                },
+              },
             },
           }
         }
@@ -400,6 +419,16 @@ describe('ModelProviderPage', () => {
     expect(screen.getByText('anthropic')).toBeInTheDocument()
   })
 
+  it('should use the empty provider state as the production tour target when no provider cards exist', () => {
+    mockProviders.splice(0)
+
+    renderModelProviderPage()
+
+    const selector = getStepByStepTourTargetSelector(STEP_BY_STEP_TOUR_TARGETS.integrationModelProviderProduction)
+    const target = document.querySelector(selector)
+    expect(target).toContainElement(screen.getByText('common.modelProvider.emptyProviderTitle'))
+  })
+
   it('should show provider placeholders while model providers are loading', () => {
     mockProviderContextState.isLoadingModelProviders = true
 
@@ -453,6 +482,9 @@ describe('ModelProviderPage', () => {
       expect(screen.getByText('common.modelProvider.noneConfigured')).toBeInTheDocument()
       expect(screen.queryByText('common.modelProvider.notConfigured')).not.toBeInTheDocument()
       expect(screen.getByText('common.modelProvider.emptyProviderTitle')).toBeInTheDocument()
+      const selector = getStepByStepTourTargetSelector(STEP_BY_STEP_TOUR_TARGETS.integrationModelProviderProduction)
+      const target = document.querySelector(selector)
+      expect(target).toContainElement(screen.getByText('anthropic'))
     })
 
     it('should show none-configured warning when providers exist but no default models set', () => {

@@ -1,4 +1,5 @@
-import { fireEvent, screen, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { STEP_BY_STEP_TOUR_TARGETS } from '@/app/components/step-by-step-tour/target-registry'
 import { renderWithNuqs } from '@/test/nuqs-testing'
 import IntegrationsPage from '../page'
 
@@ -15,12 +16,14 @@ const {
   mockCanManagement,
   mockCanDebugger,
   mockCanSetPermissions,
+  mockIsPermissionLoading,
   mockReferenceSetting,
   mockSetReferenceSettings,
 } = vi.hoisted(() => ({
   mockCanManagement: vi.fn(() => true),
   mockCanDebugger: vi.fn(() => true),
   mockCanSetPermissions: vi.fn(() => true),
+  mockIsPermissionLoading: vi.fn(() => false),
   mockReferenceSetting: vi.fn(() => ({
     permission: {
       install_permission: 'everyone',
@@ -59,6 +62,7 @@ vi.mock('@/app/components/plugins/plugin-page/use-reference-setting', () => ({
     canSetPermissions: mockCanSetPermissions(),
     canSetPluginPreferences: mockCanSetPermissions(),
     canUpdatePlugin: true,
+    isPermissionLoading: mockIsPermissionLoading(),
     setPluginPermissionSettings: mockSetReferenceSettings,
   }),
   default: () => ({
@@ -70,6 +74,7 @@ vi.mock('@/app/components/plugins/plugin-page/use-reference-setting', () => ({
     canSetPermissions: mockCanSetPermissions(),
     canSetPluginPreferences: mockCanSetPermissions(),
     canUpdatePlugin: true,
+    isPermissionLoading: mockIsPermissionLoading(),
     setReferenceSettings: mockSetReferenceSettings,
   }),
 }))
@@ -140,14 +145,23 @@ vi.mock('@/app/components/plugins/plugin-page/plugin-tasks', () => ({
   default: () => <button type="button" aria-label="plugin tasks">tasks</button>,
 }))
 
+vi.mock('@/app/components/plugins/install-plugin/install-from-marketplace-query', () => ({
+  __esModule: true,
+  default: ({ installContextCategory }: { installContextCategory?: string }) => (
+    <div data-testid="install-from-marketplace-query" data-install-context-category={installContextCategory} />
+  ),
+}))
+
 vi.mock('@/app/components/header/account-setting/model-provider-page', () => ({
   __esModule: true,
   default: ({
     layout,
+    onOpenMarketplace,
     onSearchTextChange,
     searchText,
   }: {
     layout?: (parts: { body: React.ReactNode, toolbar: React.ReactNode }) => React.ReactNode
+    onOpenMarketplace?: () => void
     onSearchTextChange?: (value: string) => void
     searchText: string
   }) => {
@@ -160,7 +174,11 @@ vi.mock('@/app/components/header/account-setting/model-provider-page', () => ({
         />
       </div>
     )
-    const body = <div data-testid="model-provider-page" />
+    const body = (
+      <div data-testid="model-provider-page">
+        <button type="button" aria-label="model provider marketplace" onClick={onOpenMarketplace}>marketplace</button>
+      </div>
+    )
 
     if (layout)
       return layout({ body, toolbar })
@@ -179,9 +197,13 @@ vi.mock('@/app/components/header/account-setting/model-provider-page', () => ({
 
 vi.mock('@/app/components/header/account-setting/data-source-page-new', () => ({
   __esModule: true,
-  default: ({ layout }: { layout?: (parts: { body: React.ReactNode, toolbar: React.ReactNode }) => React.ReactNode }) => {
+  default: ({ layout, onOpenMarketplace }: { layout?: (parts: { body: React.ReactNode, toolbar: React.ReactNode }) => React.ReactNode, onOpenMarketplace?: () => void }) => {
     const toolbar = <div data-testid="data-source-toolbar" />
-    const body = <div data-testid="data-source-page" />
+    const body = (
+      <div data-testid="data-source-page">
+        <button type="button" aria-label="data source marketplace" onClick={onOpenMarketplace}>marketplace</button>
+      </div>
+    )
 
     if (layout)
       return layout({ body, toolbar })
@@ -263,6 +285,7 @@ describe('IntegrationsPage', () => {
     mockCanManagement.mockReturnValue(true)
     mockCanDebugger.mockReturnValue(true)
     mockCanSetPermissions.mockReturnValue(true)
+    mockIsPermissionLoading.mockReturnValue(false)
     mockAppContextState.workspacePermissionKeys = ['tool.manage', 'mcp.manage']
     mockReferenceSetting.mockReturnValue({
       permission: {
@@ -292,6 +315,7 @@ describe('IntegrationsPage', () => {
     renderIntegrationsPage({ section: 'provider' })
 
     expect(screen.getByTestId('model-provider-page')).toBeInTheDocument()
+    expect(screen.getByTestId('install-from-marketplace-query')).toHaveAttribute('data-install-context-category', 'model')
     expect(screen.getByTestId('model-provider-toolbar').closest('[class*="max-w-[1600px]"]')).toHaveClass('px-6', 'pt-3', 'pb-2')
     expect(within(screen.getByTestId('model-provider-toolbar').closest('section')!).getByText('common.settings.provider')).toHaveClass('title-2xl-semi-bold')
     expect(screen.getByTestId('model-provider-page').parentElement).toHaveClass('max-w-[1600px]', 'px-6')
@@ -313,6 +337,43 @@ describe('IntegrationsPage', () => {
     expect(navText.indexOf('plugin.categorySingle.trigger')).toBeLessThan(navText.indexOf('plugin.categorySingle.agent'))
     expect(navText.indexOf('plugin.categorySingle.agent')).toBeLessThan(navText.indexOf('plugin.categorySingle.extension'))
     expect(navText.indexOf('plugin.categorySingle.extension')).toBeLessThan(navText.indexOf('common.settings.customEndpoint'))
+  })
+
+  it('anchors step-by-step tour targets inside stable sidebar rows', () => {
+    renderIntegrationsPage({ section: 'mcp' })
+
+    const targetRows = [
+      {
+        label: 'common.settings.provider',
+        target: STEP_BY_STEP_TOUR_TARGETS.integrationModelProviderNav,
+      },
+      {
+        label: 'common.toolsPage.toolPlugin',
+        target: STEP_BY_STEP_TOUR_TARGETS.integrationToolPluginNav,
+      },
+      {
+        label: 'MCP',
+        target: STEP_BY_STEP_TOUR_TARGETS.integrationMcpNav,
+      },
+      {
+        label: 'common.settings.dataSource',
+        target: STEP_BY_STEP_TOUR_TARGETS.integrationDataSourceNav,
+      },
+      {
+        label: 'plugin.categorySingle.trigger',
+        target: STEP_BY_STEP_TOUR_TARGETS.integrationTriggerNav,
+      },
+    ]
+
+    targetRows.forEach(({ label, target }) => {
+      const row = screen.getByRole('link', { name: label })
+      const targetAnchor = row.querySelector(`[data-step-by-step-tour-target="${target}"]`)
+
+      expect(row).not.toHaveAttribute('data-step-by-step-tour-target')
+      expect(row).toHaveClass('relative')
+      expect(targetAnchor).toBeInTheDocument()
+      expect(targetAnchor).toHaveClass('absolute', 'inset-y-1', 'left-0', 'right-0')
+    })
   })
 
   it('keeps sidebar item icons outlined when the item is active', () => {
@@ -353,13 +414,17 @@ describe('IntegrationsPage', () => {
     expect(screen.getByRole('link', { name: 'plugin.categorySingle.extension' })).toHaveAttribute('href', '/integrations/extension')
   })
 
-  it('opens the integrations marketplace path from plugin category empty states', () => {
-    renderIntegrationsPage({ section: 'extension' })
+  it.each([
+    ['provider', 'model provider marketplace', '/plugins/model'],
+    ['data-source', 'data source marketplace', '/plugins/datasource'],
+    ['extension', 'empty marketplace', '/plugins/extension'],
+  ] as const)('opens the %s marketplace path from integrations', (section, buttonName, marketplacePath) => {
+    renderIntegrationsPage({ section })
 
-    fireEvent.click(screen.getByRole('button', { name: 'empty marketplace' }))
+    fireEvent.click(screen.getByRole('button', { name: buttonName }))
 
     expect(mockWindowOpen).toHaveBeenCalledWith(
-      expect.stringContaining('/plugins/extension?source='),
+      expect.stringContaining(`${marketplacePath}?source=`),
       '_blank',
       'noopener,noreferrer',
     )
@@ -380,6 +445,7 @@ describe('IntegrationsPage', () => {
     const { unmount } = renderIntegrationsPage({ section: 'data-source' })
 
     expect(screen.getByTestId('data-source-page')).toBeInTheDocument()
+    expect(screen.getByTestId('install-from-marketplace-query')).toHaveAttribute('data-install-context-category', 'datasource')
     expect(screen.getByRole('button', { name: 'plugin debug' })).toHaveTextContent('plugin.debugInfo.title')
 
     unmount()
@@ -545,7 +611,7 @@ describe('IntegrationsPage', () => {
     expect(mockRouterPush).toHaveBeenCalledWith('/integrations/tools/built-in')
   })
 
-  it('keeps the tools disclosure independent from route section changes', () => {
+  it('opens the tools disclosure when a route section moves into tools', async () => {
     const view = renderIntegrationsPage(undefined, 'mcp')
 
     expect(screen.getByTestId('tool-provider-list')).toHaveAttribute('data-mounted-category', 'mcp')
@@ -566,6 +632,13 @@ describe('IntegrationsPage', () => {
     expect(screen.getByRole('button', { name: 'common.menus.tools' })).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByRole('link', { name: 'common.toolsPage.toolPlugin' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'MCP' })).not.toBeInTheDocument()
+
+    view.rerender(<IntegrationsPage section="mcp" />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'common.menus.tools' })).toHaveAttribute('aria-expanded', 'true')
+    })
+    expect(screen.getByRole('link', { name: 'MCP' })).toHaveClass('bg-state-base-active')
   })
 
   it('renders the tools header for tool sections', () => {
@@ -752,6 +825,17 @@ describe('IntegrationsPage', () => {
 
     expect(screen.getByText('common.settings.integrations').parentElement?.parentElement).toHaveClass('mb-3', 'pt-1', 'pb-0.5')
     expect(screen.getByRole('link', { name: 'common.settings.provider' }).parentElement).toHaveClass('py-4')
+  })
+
+  it('reserves the install action slot while install permission is loading', () => {
+    mockCanManagement.mockReturnValue(false)
+    mockIsPermissionLoading.mockReturnValue(true)
+
+    renderIntegrationsPage({ section: 'provider' })
+
+    expect(screen.getByText('common.settings.integrations').parentElement?.parentElement).toHaveClass('h-14', 'pt-1', 'pb-7')
+    expect(screen.queryByRole('button', { name: 'plugin install' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'common.settings.provider' }).parentElement).toHaveClass('mt-6')
   })
 
   it('keeps the integrations sidebar expanded without a collapse control', () => {

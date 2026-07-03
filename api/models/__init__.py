@@ -10,6 +10,8 @@ from .account import (
 )
 from .agent import (
     Agent,
+    AgentConfigDraft,
+    AgentConfigDraftType,
     AgentConfigRevision,
     AgentConfigRevisionOperation,
     AgentConfigSnapshot,
@@ -99,6 +101,7 @@ from .model import (
     UploadFile,
 )
 from .oauth import DatasourceOauthParamConfig, DatasourceProvider, OAuthAccessToken
+from .onboarding import AccountStepByStepTourState
 from .provider import (
     LoadBalancingModelConfig,
     Provider,
@@ -152,8 +155,11 @@ __all__ = [
     "Account",
     "AccountIntegrate",
     "AccountStatus",
+    "AccountStepByStepTourState",
     "AccountTrialAppRecord",
     "Agent",
+    "AgentConfigDraft",
+    "AgentConfigDraftType",
     "AgentConfigRevision",
     "AgentConfigRevisionOperation",
     "AgentConfigSnapshot",

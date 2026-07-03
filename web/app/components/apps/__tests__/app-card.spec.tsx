@@ -3,6 +3,7 @@ import type { App } from '@/types/app'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import * as React from 'react'
 import { renderWithSystemFeatures } from '@/__tests__/utils/mock-system-features'
+import { STEP_BY_STEP_TOUR_TARGETS } from '@/app/components/step-by-step-tour/target-registry'
 import { AccessMode } from '@/models/access-control'
 import * as appsService from '@/service/apps'
 import * as exploreService from '@/service/explore'
@@ -14,6 +15,10 @@ import { StarredAppCard } from '../starred-app-card'
 
 let mockWebappAuthEnabled = false
 let mockRbacEnabled = true
+const mockUserCanAccessApp = vi.hoisted(() => ({
+  result: true as boolean | undefined,
+  isLoading: false,
+}))
 
 const render = (ui: React.ReactElement) => renderWithSystemFeatures(ui, {
   systemFeatures: {
@@ -118,15 +123,15 @@ vi.mock('@/service/explore', () => ({
 
 vi.mock('@/service/access-control', () => ({
   useGetUserCanAccessApp: () => ({
-    data: { result: true },
-    isLoading: false,
+    data: mockUserCanAccessApp.result === undefined ? undefined : { result: mockUserCanAccessApp.result },
+    isLoading: mockUserCanAccessApp.isLoading,
   }),
 }))
 
 vi.mock('@/service/access-control/use-app-access-control', () => ({
   useGetUserCanAccessApp: () => ({
-    data: { result: true },
-    isLoading: false,
+    data: mockUserCanAccessApp.result === undefined ? undefined : { result: mockUserCanAccessApp.result },
+    isLoading: mockUserCanAccessApp.isLoading,
   }),
 }))
 
@@ -272,18 +277,24 @@ vi.mock('@langgenius/dify-ui/dropdown-menu', () => {
       children,
       className,
       popupClassName,
+      popupProps,
+      positionerProps,
     }: {
       children: React.ReactNode
       className?: string
       popupClassName?: string
+      popupProps?: React.HTMLAttributes<HTMLDivElement>
+      positionerProps?: React.HTMLAttributes<HTMLDivElement>
     }) => {
       const { isOpen } = useDropdownMenuContext()
       if (!isOpen)
         return null
 
       return (
-        <div data-testid="dropdown-menu-content" role="menu" className={[className, popupClassName].filter(Boolean).join(' ')}>
-          {children}
+        <div data-testid="dropdown-menu-positioner" {...positionerProps}>
+          <div data-testid="dropdown-menu-content" role="menu" className={[className, popupClassName].filter(Boolean).join(' ')} {...popupProps}>
+            {children}
+          </div>
         </div>
       )
     },
@@ -380,6 +391,8 @@ describe('AppCard', () => {
     mockOpenAsyncWindow.mockReset()
     mockWebappAuthEnabled = false
     mockRbacEnabled = true
+    mockUserCanAccessApp.result = true
+    mockUserCanAccessApp.isLoading = false
     mockDeleteMutationPending = false
     mockToggleStarMutationPending = false
     mockAppContext.isCurrentWorkspaceEditor = true
@@ -400,7 +413,7 @@ describe('AppCard', () => {
         author_name: 'Readonly Author',
         created_by: 'another-user',
         maintainer: 'another-user',
-        tags: [{ id: 'tag-preview', name: 'Readonly Tag', type: 'app' as const, binding_count: 0 }],
+        tags: [{ id: 'tag-preview', name: 'Readonly Tag', type: 'app' as const, binding_count: '' }],
         permission_keys: [AppACLPermission.Preview],
       })
 
@@ -501,7 +514,7 @@ describe('AppCard', () => {
     it('should handle app with tags', () => {
       const appWithTags = {
         ...mockApp,
-        tags: [{ id: 'tag1', name: 'Tag 1', type: 'app' as const, binding_count: 0 }],
+        tags: [{ id: 'tag1', name: 'Tag 1', type: 'app' as const, binding_count: '' }],
       }
       render(<AppCard app={appWithTags} />)
       // Verify the tag selector component renders
@@ -510,10 +523,10 @@ describe('AppCard', () => {
 
     it('should display refreshed tag names from app props when tag ids stay the same', () => {
       const firstApp = createMockApp({
-        tags: [{ id: 'tag1', name: 'Old Tag', type: 'app' as const, binding_count: 0 }],
+        tags: [{ id: 'tag1', name: 'Old Tag', type: 'app' as const, binding_count: '' }],
       })
       const refreshedApp = createMockApp({
-        tags: [{ id: 'tag1', name: 'New Tag', type: 'app' as const, binding_count: 0 }],
+        tags: [{ id: 'tag1', name: 'New Tag', type: 'app' as const, binding_count: '' }],
       })
 
       const { rerender } = render(<AppCard app={firstApp} />)
@@ -531,7 +544,7 @@ describe('AppCard', () => {
       mockAppContext.userProfile = { id: 'user-2' }
       const editableApp = createMockApp({
         maintainer: 'user-1',
-        tags: [{ id: 'tag1', name: 'Tag 1', type: 'app' as const, binding_count: 0 }],
+        tags: [{ id: 'tag1', name: 'Tag 1', type: 'app' as const, binding_count: '' }],
         permission_keys: [AppACLPermission.Edit],
       })
 
@@ -546,7 +559,7 @@ describe('AppCard', () => {
       mockAppContext.userProfile = { id: 'user-2' }
       const tagManageApp = createMockApp({
         maintainer: 'user-1',
-        tags: [{ id: 'tag1', name: 'Tag 1', type: 'app' as const, binding_count: 0 }],
+        tags: [{ id: 'tag1', name: 'Tag 1', type: 'app' as const, binding_count: '' }],
         permission_keys: [AppACLPermission.ViewLayout],
       })
 
@@ -561,7 +574,7 @@ describe('AppCard', () => {
       mockAppContext.userProfile = { id: 'user-2' }
       const readonlyApp = createMockApp({
         maintainer: 'user-1',
-        tags: [{ id: 'tag1', name: 'Tag 1', type: 'app' as const, binding_count: 0 }],
+        tags: [{ id: 'tag1', name: 'Tag 1', type: 'app' as const, binding_count: '' }],
         permission_keys: [AppACLPermission.ViewLayout],
       })
 
@@ -1429,9 +1442,9 @@ describe('AppCard', () => {
       const multiTagApp = {
         ...mockApp,
         tags: [
-          { id: 'tag1', name: 'Tag 1', type: 'app' as const, binding_count: 0 },
-          { id: 'tag2', name: 'Tag 2', type: 'app' as const, binding_count: 0 },
-          { id: 'tag3', name: 'Tag 3', type: 'app' as const, binding_count: 0 },
+          { id: 'tag1', name: 'Tag 1', type: 'app' as const, binding_count: '' },
+          { id: 'tag2', name: 'Tag 2', type: 'app' as const, binding_count: '' },
+          { id: 'tag3', name: 'Tag 3', type: 'app' as const, binding_count: '' },
         ],
       }
       render(<AppCard app={multiTagApp} />)
@@ -1586,7 +1599,7 @@ describe('AppCard', () => {
 
     it('should stop propagation when clicking tag selector area', () => {
       const multiTagApp = createMockApp({
-        tags: [{ id: 'tag1', name: 'Tag 1', type: 'app' as const, binding_count: 0 }],
+        tags: [{ id: 'tag1', name: 'Tag 1', type: 'app' as const, binding_count: '' }],
       })
 
       render(<AppCard app={multiTagApp} />)
@@ -1730,9 +1743,49 @@ describe('AppCard', () => {
         expect(screen.getByText('common.operation.delete')).toBeInTheDocument()
       })
     })
+
+    it('should render the tour-forced operations menu as presentation only', async () => {
+      render(
+        <AppCard
+          app={mockApp}
+          stepByStepTourActionMenuHighlightPart={STEP_BY_STEP_TOUR_TARGETS.studioWithAppsFirstAppCardActionsMenu}
+          stepByStepTourActionMenuOpen
+        />,
+      )
+
+      expect(await screen.findByText('app.editApp')).toBeInTheDocument()
+      expect(screen.queryByRole('menuitem', { name: 'app.editApp' })).not.toBeInTheDocument()
+      expect(screen.getByTestId('dropdown-menu-positioner'))
+        .toHaveAttribute('data-step-by-step-tour-highlight-part', STEP_BY_STEP_TOUR_TARGETS.studioWithAppsFirstAppCardActionsMenu)
+      expect(screen.getByTestId('dropdown-menu-positioner')).toHaveAttribute('inert')
+      expect(screen.getByTestId('dropdown-menu-content')).toHaveAttribute('aria-hidden', 'true')
+      expect(screen.getByTestId('dropdown-menu-content')).toHaveClass('pointer-events-none')
+    })
   })
 
   describe('Open in Explore - No App Found', () => {
+    it('should tell workflow users to publish before opening in explore', async () => {
+      const workflowApp = createMockApp({
+        mode: AppModeEnum.WORKFLOW,
+        workflow: undefined,
+      })
+      render(<AppCard app={workflowApp} />)
+
+      fireEvent.click(screen.getByTestId('dropdown-menu-trigger'))
+      await waitFor(() => {
+        expect(screen.getByText('app.openInExplore')).toBeInTheDocument()
+      })
+
+      fireEvent.click(screen.getByText('app.openInExplore'))
+
+      expect(mockOpenAsyncWindow).not.toHaveBeenCalled()
+      expect(exploreService.fetchInstalledAppList).not.toHaveBeenCalled()
+      expect(toastMocks.record).toHaveBeenCalledWith({
+        type: 'error',
+        message: 'app.notPublishedYet',
+      })
+    })
+
     it('should handle case when installed_apps is empty array', async () => {
       (exploreService.fetchInstalledAppList as Mock).mockResolvedValueOnce({ installed_apps: [] })
 
@@ -1756,6 +1809,10 @@ describe('AppCard', () => {
 
       await waitFor(() => {
         expect(exploreService.fetchInstalledAppList).toHaveBeenCalled()
+        expect(toastMocks.record).toHaveBeenCalledWith({
+          type: 'error',
+          message: 'app.notPublishedYet',
+        })
       })
     })
 
@@ -1941,6 +1998,31 @@ describe('AppCard', () => {
       fireEvent.click(screen.getByTestId('dropdown-menu-trigger'))
       await waitFor(() => {
         expect(screen.getByText('app.openInExplore')).toBeInTheDocument()
+      })
+    })
+
+    it('should keep open in explore visible for unpublished workflow apps while access check is pending', async () => {
+      mockUserCanAccessApp.result = false
+      mockUserCanAccessApp.isLoading = true
+      const workflowApp = createMockApp({
+        mode: AppModeEnum.WORKFLOW,
+        workflow: undefined,
+      })
+
+      render(<AppCard app={workflowApp} />)
+
+      fireEvent.click(screen.getByTestId('dropdown-menu-trigger'))
+      await waitFor(() => {
+        expect(screen.getByText('app.openInExplore')).toBeInTheDocument()
+      })
+
+      fireEvent.click(screen.getByText('app.openInExplore'))
+
+      expect(mockOpenAsyncWindow).not.toHaveBeenCalled()
+      expect(exploreService.fetchInstalledAppList).not.toHaveBeenCalled()
+      expect(toastMocks.record).toHaveBeenCalledWith({
+        type: 'error',
+        message: 'app.notPublishedYet',
       })
     })
 

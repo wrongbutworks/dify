@@ -1,12 +1,22 @@
+import type {
+  StepByStepTourStatePatchPayload,
+  StepByStepTourStateResponse,
+} from '@dify/contracts/api/console/onboarding/types.gen'
 import type { ReactNode } from 'react'
 import type { Mock } from 'vitest'
 import type { CreateAppModalProps } from '@/app/components/explore/create-app-modal'
+import type { StepByStepTourAccountState, StepByStepTourUiState } from '@/app/components/step-by-step-tour/types'
 import type { Banner as BannerType } from '@/models/app'
 import type { App } from '@/models/explore'
 import type { App as WorkspaceApp } from '@/types/app'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { createStore, Provider as JotaiProvider } from 'jotai'
 import { createSystemFeaturesWrapper } from '@/__tests__/utils/mock-system-features'
+import {
+  StepByStepTourTestStateObserver,
+  StepByStepTourTestUiStateHydrator,
+} from '@/app/components/step-by-step-tour/__tests__/test-utils'
+import { STEP_BY_STEP_TOUR_TARGETS } from '@/app/components/step-by-step-tour/target-registry'
 import { useAppContext } from '@/context/app-context'
 import { fetchAppDetail, fetchAppList, fetchBanners } from '@/service/explore'
 import { renderWithNuqs } from '@/test/nuqs-testing'
@@ -34,6 +44,107 @@ let mockIsError = false
 const mockHandleImportDSL = vi.fn()
 const mockHandleImportDSLConfirm = vi.fn()
 const mockTrackCreateApp = vi.fn()
+const mockStepByStepTour = vi.hoisted(() => {
+  const stateQueryKey = ['console', 'onboarding', 'step-by-step-tour', 'state'] as const
+  const createState = (
+    overrides: Partial<StepByStepTourStateResponse> = {},
+  ): StepByStepTourStateResponse => ({
+    eligible: true,
+    first_workspace_id: 'workspace-1',
+    skipped: false,
+    completed_task_ids: [],
+    manually_enabled_workspace_ids: ['workspace-1'],
+    manually_disabled_workspace_ids: [],
+    updated_at: '2026-07-01T00:00:00Z',
+    ...overrides,
+  })
+  const createUiState = (
+    overrides: Partial<StepByStepTourUiState> = {},
+  ): StepByStepTourUiState => ({
+    activeGuideGroup: undefined,
+    activeGuideIndex: undefined,
+    activeGuideIndexes: undefined,
+    activeTaskId: undefined,
+    minimized: false,
+    ...overrides,
+  })
+  let state = createState()
+  let uiState: StepByStepTourUiState = createUiState()
+  let observedState: StepByStepTourAccountState | undefined
+  const patchState = vi.fn(
+    async ({ body }: { body: StepByStepTourStatePatchPayload }): Promise<StepByStepTourStateResponse> => {
+      switch (body.action) {
+        case 'complete_task':
+          state = {
+            ...state,
+            completed_task_ids: body.task_id && !state.completed_task_ids?.includes(body.task_id)
+              ? [...(state.completed_task_ids ?? []), body.task_id]
+              : state.completed_task_ids,
+          }
+          break
+        case 'uncomplete_task':
+          state = {
+            ...state,
+            completed_task_ids: (state.completed_task_ids ?? []).filter(taskId => taskId !== body.task_id),
+          }
+          break
+        case 'skip':
+          state = {
+            ...state,
+            skipped: true,
+            manually_enabled_workspace_ids: (state.manually_enabled_workspace_ids ?? []).filter(id => id !== 'workspace-1'),
+          }
+          break
+        case 'enable_current_workspace':
+          state = {
+            ...state,
+            skipped: false,
+            manually_enabled_workspace_ids: Array.from(new Set([...(state.manually_enabled_workspace_ids ?? []), 'workspace-1'])),
+            manually_disabled_workspace_ids: (state.manually_disabled_workspace_ids ?? []).filter(id => id !== 'workspace-1'),
+          }
+          break
+        case 'disable_current_workspace':
+          state = {
+            ...state,
+            manually_enabled_workspace_ids: (state.manually_enabled_workspace_ids ?? []).filter(id => id !== 'workspace-1'),
+            manually_disabled_workspace_ids: Array.from(new Set([...(state.manually_disabled_workspace_ids ?? []), 'workspace-1'])),
+          }
+          break
+      }
+
+      return state
+    },
+  )
+
+  return {
+    get observedState() {
+      return observedState
+    },
+    get state() {
+      return state
+    },
+    get uiState() {
+      return uiState
+    },
+    patchState,
+    reset() {
+      state = createState()
+      uiState = createUiState()
+      observedState = undefined
+      patchState.mockClear()
+    },
+    setObservedState(nextState: StepByStepTourAccountState) {
+      observedState = nextState
+    },
+    setState(overrides: Partial<StepByStepTourStateResponse> = {}) {
+      state = createState(overrides)
+    },
+    setUiState(overrides: Partial<StepByStepTourUiState> = {}) {
+      uiState = createUiState(overrides)
+    },
+    stateQueryKey,
+  }
+})
 const toastMocks = vi.hoisted(() => {
   const record = vi.fn()
   const api = Object.assign(vi.fn((message: unknown, options?: Record<string, unknown>) => record({ message, ...options })), {
@@ -77,7 +188,7 @@ vi.mock('@/service/client', () => ({
       },
     },
     apps: {
-      list: {
+      get: {
         queryOptions: (options: {
           input?: { query?: { limit?: number } }
           select?: (response: {
@@ -91,7 +202,7 @@ vi.mock('@/service/client', () => ({
           const limit = options.input?.query?.limit ?? mockWorkspaceApps.length
           if (mockWorkspaceAppsLoading) {
             return {
-              queryKey: ['console', 'apps', 'list', options],
+              queryKey: ['console', 'apps', 'get', options],
               queryFn: () => new Promise(() => {}),
               select: options.select,
             }
@@ -104,11 +215,29 @@ vi.mock('@/service/client', () => ({
             total: mockWorkspaceApps.length,
           }
           return {
-            queryKey: ['console', 'apps', 'list', options],
+            queryKey: ['console', 'apps', 'get', options],
             queryFn: () => Promise.resolve(response),
             initialData: response,
             select: options.select,
           }
+        },
+      },
+    },
+    onboarding: {
+      stepByStepTour: {
+        state: {
+          get: {
+            queryKey: () => mockStepByStepTour.stateQueryKey,
+            queryOptions: () => ({
+              queryKey: mockStepByStepTour.stateQueryKey,
+              queryFn: async () => mockStepByStepTour.state,
+            }),
+          },
+          patch: {
+            mutationOptions: () => ({
+              mutationFn: mockStepByStepTour.patchState,
+            }),
+          },
         },
       },
     },
@@ -186,9 +315,27 @@ vi.mock('@/app/components/explore/create-app-modal', () => ({
 }))
 
 vi.mock('../../try-app', () => ({
-  default: ({ onCreate, onClose }: { onCreate: () => void, onClose: () => void }) => (
+  default: ({
+    canCreate = true,
+    createButtonStepByStepTourTarget,
+    onCreate,
+    onClose,
+  }: {
+    canCreate?: boolean
+    createButtonStepByStepTourTarget?: string
+    onCreate: () => void
+    onClose: () => void
+  }) => (
     <div data-testid="try-app-panel">
-      <button data-testid="try-app-create" onClick={onCreate}>create</button>
+      {canCreate && (
+        <button
+          data-testid="try-app-create"
+          data-step-by-step-tour-target={createButtonStepByStepTourTarget}
+          onClick={onCreate}
+        >
+          create
+        </button>
+      )}
       <button data-testid="try-app-close" onClick={onClose}>close</button>
     </div>
   ),
@@ -279,6 +426,11 @@ const createBanner = (overrides: Partial<BannerType> = {}): BannerType => ({
 
 const mockAppCreatePermission = (hasEditPermission: boolean) => {
   ;(useAppContext as Mock).mockReturnValue({
+    currentWorkspace: {
+      id: 'workspace-1',
+      name: 'Solar Studio',
+      role: 'owner',
+    },
     userProfile: { id: 'user-1' },
     workspacePermissionKeys: hasEditPermission ? ['app.create_and_management'] : [],
   })
@@ -312,6 +464,7 @@ const renderAppList = (
     queryClient.setQueryData(exploreAppListQueryKey, mockExploreData)
   if (options.enableExploreBanner && !mockBannersLoading)
     queryClient.setQueryData(exploreBannersQueryKey, mockBanners)
+  queryClient.setQueryData(mockStepByStepTour.stateQueryKey, mockStepByStepTour.state)
 
   const mockFetchAppList = fetchAppList as unknown as Mock
   const mockFetchBanners = fetchBanners as unknown as Mock
@@ -339,7 +492,12 @@ const renderAppList = (
 
   const Wrapped = ({ children }: { children: ReactNode }) => (
     <JotaiProvider store={jotaiStore}>
-      <SystemFeaturesWrapper>{children}</SystemFeaturesWrapper>
+      <SystemFeaturesWrapper>
+        <StepByStepTourTestUiStateHydrator initialState={mockStepByStepTour.uiState}>
+          <StepByStepTourTestStateObserver onChange={mockStepByStepTour.setObservedState} />
+          {children}
+        </StepByStepTourTestUiStateHydrator>
+      </SystemFeaturesWrapper>
     </JotaiProvider>
   )
   const rendered = renderWithNuqs(
@@ -377,6 +535,7 @@ describe('AppList', () => {
     mockIsLoading = false
     mockIsError = false
     mockConfig.isCloudEdition = false
+    mockStepByStepTour.reset()
   })
 
   afterEach(() => {
@@ -536,7 +695,12 @@ describe('AppList', () => {
 
       renderAppList()
 
-      expect(screen.getByRole('heading', { name: 'explore.learnDify.title' })).toBeInTheDocument()
+      const learnDifyHeading = screen.getByRole('heading', { name: 'explore.learnDify.title' })
+      expect(learnDifyHeading).toBeInTheDocument()
+      expect(learnDifyHeading.closest('section')).toHaveAttribute(
+        'data-step-by-step-tour-target',
+        STEP_BY_STEP_TOUR_TARGETS.home,
+      )
       expect(screen.getByText('Learn Workflow Basics')).toBeInTheDocument()
       expect(screen.getByText('Learn Agent Basics')).toBeInTheDocument()
       expect(screen.queryByRole('link', { name: 'explore.learnDify.moreTemplates' })).not.toBeInTheDocument()
@@ -654,8 +818,8 @@ describe('AppList', () => {
       mockExploreData = {
         categories: ['Writing'],
         allList: [createApp()],
-      };
-      (fetchAppDetail as unknown as Mock).mockResolvedValue({ export_data: 'yaml-content', mode: AppModeEnum.CHAT })
+      }
+      ;(fetchAppDetail as unknown as Mock).mockResolvedValue({ export_data: 'yaml-content', mode: AppModeEnum.CHAT })
       mockHandleImportDSL.mockImplementation(async (_payload: unknown, options: { onSuccess?: () => void, onPending?: () => void }) => {
         options.onPending?.()
       })
@@ -690,8 +854,8 @@ describe('AppList', () => {
       mockExploreData = {
         categories: ['Writing'],
         allList: [createApp()],
-      };
-      (fetchAppDetail as unknown as Mock).mockResolvedValue({ export_data: 'yaml-content', mode: AppModeEnum.CHAT })
+      }
+      ;(fetchAppDetail as unknown as Mock).mockResolvedValue({ export_data: 'yaml-content', mode: AppModeEnum.CHAT })
       mockHandleImportDSL.mockImplementation(async (_payload: unknown, options: { onSuccess?: (payload: { app_mode: AppModeEnum }) => void }) => {
         options.onSuccess?.({ app_mode: AppModeEnum.CHAT })
       })
@@ -702,6 +866,128 @@ describe('AppList', () => {
 
       await waitFor(() => {
         expect(fetchAppDetail).toHaveBeenCalledWith('learn-basic-1')
+      })
+    })
+
+    it('should advance the Learn Dify tour to the create button after a lesson opens', async () => {
+      vi.useRealTimers()
+      mockExploreData = {
+        categories: ['Writing'],
+        allList: [createApp()],
+      }
+      mockStepByStepTour.setUiState({
+        activeTaskId: 'home',
+        activeGuideIndex: 0,
+        minimized: true,
+      })
+
+      renderAppList(true, undefined, undefined, { isCloudEdition: true })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Learn Workflow Basics' }))
+
+      expect(await screen.findByTestId('try-app-panel')).toBeInTheDocument()
+      expect(screen.getByTestId('try-app-create')).toHaveAttribute(
+        'data-step-by-step-tour-target',
+        STEP_BY_STEP_TOUR_TARGETS.homeTryAppCreate,
+      )
+      await waitFor(() => {
+        const state = mockStepByStepTour.observedState
+        expect(state?.activeTaskId).toBe('home')
+        expect(state?.activeGuideIndex).toBe(1)
+        expect(state?.completedTaskIds).toEqual([])
+      })
+    })
+
+    it('should complete the Learn Dify tour when a no-create user opens a lesson detail', async () => {
+      vi.useRealTimers()
+      mockExploreData = {
+        categories: ['Writing'],
+        allList: [createApp()],
+      }
+      mockStepByStepTour.setUiState({
+        activeTaskId: 'home',
+        activeGuideIndex: 0,
+        minimized: true,
+      })
+
+      renderAppList(false, undefined, undefined, { isCloudEdition: true })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Learn Workflow Basics' }))
+
+      expect(await screen.findByTestId('try-app-panel')).toBeInTheDocument()
+      expect(screen.queryByTestId('try-app-create')).not.toBeInTheDocument()
+      await waitFor(() => {
+        const state = mockStepByStepTour.observedState
+        expect(state?.activeTaskId).toBeUndefined()
+        expect(state?.activeGuideIndex).toBeUndefined()
+        expect(state?.activeGuideGroup).toBeUndefined()
+        expect(state?.completedTaskIds).toEqual(['home'])
+        expect(state?.minimized).toBe(false)
+      })
+    })
+
+    it('should complete the Learn Dify tour only after the app is created from details', async () => {
+      vi.useRealTimers()
+      mockExploreData = {
+        categories: ['Writing'],
+        allList: [createApp()],
+      }
+      mockStepByStepTour.setUiState({
+        activeTaskId: 'home',
+        activeGuideIndex: 0,
+        minimized: true,
+      });
+      (fetchAppDetail as unknown as Mock).mockResolvedValue({ export_data: 'yaml-content', mode: AppModeEnum.CHAT })
+      mockHandleImportDSL.mockImplementation(async (_payload: unknown, options: { onSuccess?: (payload: { app_mode: AppModeEnum }) => void }) => {
+        options.onSuccess?.({ app_mode: AppModeEnum.CHAT })
+      })
+
+      renderAppList(true, undefined, undefined, { isCloudEdition: true })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Learn Workflow Basics' }))
+      fireEvent.click(await screen.findByTestId('try-app-create'))
+      fireEvent.click(await screen.findByTestId('confirm-create'))
+
+      await waitFor(() => {
+        const state = mockStepByStepTour.observedState
+        expect(state?.activeTaskId).toBeUndefined()
+        expect(state?.activeGuideIndex).toBeUndefined()
+        expect(state?.completedTaskIds).toEqual(['home'])
+      })
+    })
+
+    it('should hide the Learn Dify tour target while the create modal is open and abandon on cancel', async () => {
+      vi.useRealTimers()
+      mockExploreData = {
+        categories: ['Writing'],
+        allList: [createApp()],
+      }
+      mockStepByStepTour.setUiState({
+        activeTaskId: 'home',
+        activeGuideIndex: 0,
+        minimized: true,
+      })
+
+      renderAppList(true, undefined, undefined, { isCloudEdition: true })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Learn Workflow Basics' }))
+      const createFromDetailsButton = await screen.findByTestId('try-app-create')
+      expect(createFromDetailsButton).toHaveAttribute(
+        'data-step-by-step-tour-target',
+        STEP_BY_STEP_TOUR_TARGETS.homeTryAppCreate,
+      )
+
+      fireEvent.click(createFromDetailsButton)
+      expect(await screen.findByTestId('create-app-modal')).toBeInTheDocument()
+      expect(createFromDetailsButton).not.toHaveAttribute('data-step-by-step-tour-target')
+
+      fireEvent.click(screen.getByTestId('hide-create'))
+
+      await waitFor(() => {
+        const state = mockStepByStepTour.observedState
+        expect(state?.activeTaskId).toBeUndefined()
+        expect(state?.activeGuideIndex).toBeUndefined()
+        expect(state?.completedTaskIds).toEqual([])
       })
     })
   })

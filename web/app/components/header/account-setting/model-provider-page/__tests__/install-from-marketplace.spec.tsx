@@ -3,6 +3,7 @@ import type { ModelProvider } from '../declarations'
 import { fireEvent, render, screen } from '@testing-library/react'
 
 import { describe, expect, it, vi } from 'vitest'
+import { getStepByStepTourTargetSelector, STEP_BY_STEP_TOUR_TARGETS } from '@/app/components/step-by-step-tour/target-registry'
 import { useMarketplaceAllPlugins } from '../hooks'
 import InstallFromMarketplace from '../install-from-marketplace'
 
@@ -113,6 +114,34 @@ describe('InstallFromMarketplace', () => {
     expect(screen.getByText('Plugin 1')).toBeInTheDocument()
   })
 
+  it('should anchor the tour target to the heading and first marketplace row', () => {
+    (useMarketplaceAllPlugins as unknown as Mock).mockReturnValue({
+      plugins: [
+        { plugin_id: '1', name: 'Plugin 1' },
+        { plugin_id: '2', name: 'Plugin 2' },
+        { plugin_id: '3', name: 'Plugin 3' },
+        { plugin_id: '4', name: 'Plugin 4' },
+      ],
+      isLoading: false,
+    })
+
+    render(
+      <InstallFromMarketplace
+        providers={mockProviders}
+        searchText=""
+        stepByStepTourTarget={STEP_BY_STEP_TOUR_TARGETS.integrationModelProviderInstall}
+      />,
+    )
+
+    const selector = getStepByStepTourTargetSelector(STEP_BY_STEP_TOUR_TARGETS.integrationModelProviderInstall)
+    const target = document.querySelector<HTMLElement>(selector)
+
+    expect(target).toHaveClass('absolute', 'inset-x-0', 'top-0', 'h-[174px]')
+    expect(target).toHaveAttribute('aria-hidden', 'true')
+    expect(target?.parentElement).toContainElement(screen.getByRole('button', { name: /common\.modelProvider\.installProvider/ }))
+    expect(target?.parentElement).toContainElement(screen.getByTestId('plugin-list'))
+  })
+
   it('should hide bundle plugins from the list', () => {
     (useMarketplaceAllPlugins as unknown as Mock).mockReturnValue({
       plugins: [
@@ -131,5 +160,16 @@ describe('InstallFromMarketplace', () => {
   it('should render discovery link', () => {
     render(<InstallFromMarketplace providers={mockProviders} searchText="" />)
     expect(screen.getByText('plugin.marketplace.difyMarketplace')).toHaveAttribute('href', 'https://marketplace.test/plugins/model?theme=light')
+  })
+
+  it('should use the marketplace callback action when provided', () => {
+    const onOpenMarketplace = vi.fn()
+
+    render(<InstallFromMarketplace providers={mockProviders} searchText="" onOpenMarketplace={onOpenMarketplace} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'plugin.marketplace.difyMarketplace' }))
+
+    expect(onOpenMarketplace).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('link', { name: 'plugin.marketplace.difyMarketplace' })).not.toBeInTheDocument()
   })
 })

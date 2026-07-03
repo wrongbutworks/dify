@@ -1,5 +1,10 @@
+import type {
+  StepByStepTourStatePatchPayload,
+  StepByStepTourStateResponse,
+} from '@dify/contracts/api/console/onboarding/types.gen'
 import type { ReactNode } from 'react'
 import type { Mock } from 'vitest'
+import type { StepByStepTourAccountState, StepByStepTourUiState } from '@/app/components/step-by-step-tour/types'
 import type { AppContextValue } from '@/context/app-context'
 import type { ModalContextState } from '@/context/modal-context'
 import type { ProviderContextState } from '@/context/provider-context'
@@ -8,11 +13,15 @@ import type { InstalledApp } from '@/models/explore'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { createStore, Provider as JotaiProvider } from 'jotai'
 import { createTestQueryClient, renderWithSystemFeatures } from '@/__tests__/utils/mock-system-features'
-import { useStore as useAppStore } from '@/app/components/app/store'
 import { Plan } from '@/app/components/billing/type'
+import { DETAIL_SIDEBAR_STORAGE_KEY } from '@/app/components/detail-sidebar/storage'
 import { LEARN_DIFY_HIDDEN_STORAGE_KEY } from '@/app/components/explore/learn-dify/storage'
 import { useGotoAnythingOpen } from '@/app/components/goto-anything/atoms'
 import { ACCOUNT_SETTING_TAB } from '@/app/components/header/account-setting/constants'
+import {
+  StepByStepTourTestStateObserver,
+  StepByStepTourTestUiStateHydrator,
+} from '@/app/components/step-by-step-tour/__tests__/test-utils'
 import { useAppContext, useSelector as useAppContextSelector } from '@/context/app-context'
 import { useModalContext } from '@/context/modal-context'
 import { useProviderContext } from '@/context/provider-context'
@@ -20,21 +29,103 @@ import { usePathname, useRouter } from '@/next/navigation'
 import { consoleQuery } from '@/service/client'
 import { useGetInstalledApps, useUninstallApp, useUpdateAppPinStatus } from '@/service/use-explore'
 import { AppModeEnum } from '@/types/app'
-import MainNav from '../index'
-import { DETAIL_SIDEBAR_STORAGE_KEY } from '../storage'
+import { MainNav } from '../index'
 
-const activeGradientMaskClassName = 'aria-[current=page]:main-nav-active-glass'
+const activeGradientMaskClassName = 'aria-[current=page]:dify-blue-glass-surface'
 const activeStackingClassName = 'aria-[current=page]:z-1'
 
-const { mockIsAgentV2Enabled, mockSwitchWorkspace, mockToastSuccess, hotkeyRegistrations } = vi.hoisted(() => ({
+const { mockIsAgentV2Enabled, mockSwitchWorkspace, mockToastSuccess } = vi.hoisted(() => ({
   mockSwitchWorkspace: vi.fn(),
   mockToastSuccess: vi.fn(),
   mockIsAgentV2Enabled: vi.fn(() => true),
-  hotkeyRegistrations: new Map<string, {
-    handler: (event: { preventDefault: () => void }) => void
-    options?: { ignoreInputs?: boolean }
-  }>(),
 }))
+const mockStepByStepTour = vi.hoisted(() => {
+  const stateQueryKey = ['console', 'onboarding', 'step-by-step-tour', 'state'] as const
+  const createState = (
+    overrides: Partial<StepByStepTourStateResponse> = {},
+  ): StepByStepTourStateResponse => ({
+    eligible: true,
+    first_workspace_id: 'workspace-1',
+    skipped: false,
+    completed_task_ids: [],
+    manually_enabled_workspace_ids: [],
+    manually_disabled_workspace_ids: [],
+    updated_at: '2026-07-01T00:00:00Z',
+    ...overrides,
+  })
+  const createUiState = (
+    overrides: Partial<StepByStepTourUiState> = {},
+  ): StepByStepTourUiState => ({
+    activeGuideGroup: undefined,
+    activeGuideIndex: undefined,
+    activeGuideIndexes: undefined,
+    activeTaskId: undefined,
+    minimized: false,
+    ...overrides,
+  })
+  let state = createState()
+  let uiState = createUiState()
+  let observedState: StepByStepTourAccountState | undefined
+  const patchState = vi.fn(
+    async ({ body }: { body: StepByStepTourStatePatchPayload }): Promise<StepByStepTourStateResponse> => {
+      switch (body.action) {
+        case 'enable_current_workspace':
+          state = {
+            ...state,
+            skipped: false,
+            manually_enabled_workspace_ids: Array.from(new Set([...(state.manually_enabled_workspace_ids ?? []), 'workspace-1'])),
+            manually_disabled_workspace_ids: (state.manually_disabled_workspace_ids ?? []).filter(id => id !== 'workspace-1'),
+          }
+          break
+        case 'disable_current_workspace':
+          state = {
+            ...state,
+            manually_enabled_workspace_ids: (state.manually_enabled_workspace_ids ?? []).filter(id => id !== 'workspace-1'),
+            manually_disabled_workspace_ids: Array.from(new Set([...(state.manually_disabled_workspace_ids ?? []), 'workspace-1'])),
+          }
+          break
+        case 'skip':
+          state = {
+            ...state,
+            skipped: true,
+            manually_enabled_workspace_ids: (state.manually_enabled_workspace_ids ?? []).filter(id => id !== 'workspace-1'),
+          }
+          break
+      }
+
+      return state
+    },
+  )
+
+  return {
+    get observedState() {
+      return observedState
+    },
+    get state() {
+      return state
+    },
+    get uiState() {
+      return uiState
+    },
+    patchState,
+    reset() {
+      state = createState()
+      uiState = createUiState()
+      observedState = undefined
+      patchState.mockClear()
+    },
+    setObservedState(nextState: StepByStepTourAccountState) {
+      observedState = nextState
+    },
+    setState(overrides: Partial<StepByStepTourStateResponse> = {}) {
+      state = createState(overrides)
+    },
+    setUiState(overrides: Partial<StepByStepTourUiState> = {}) {
+      uiState = createUiState(overrides)
+    },
+    stateQueryKey,
+  }
+})
 
 vi.mock('@/features/agent-v2/feature-flag', () => ({
   isAgentV2Enabled: () => mockIsAgentV2Enabled(),
@@ -59,6 +150,35 @@ vi.mock('@/next/navigation', async (importOriginal) => {
     ...actual,
     usePathname: vi.fn(),
     useRouter: vi.fn(),
+  }
+})
+
+vi.mock('react-i18next', async () => {
+  const actual = await vi.importActual<typeof import('react-i18next')>('react-i18next')
+  const { createReactI18nextMock } = await import('@/test/i18n-mock')
+
+  return {
+    ...actual,
+    ...createReactI18nextMock({
+      'common.stepByStepTour.title': 'Get to know Dify',
+      'common.stepByStepTour.duration': 'A quick tour — about 5 minutes',
+      'common.stepByStepTour.skip': 'Skip',
+      'common.stepByStepTour.minimize': 'Minimize tour',
+      'common.stepByStepTour.restore': 'Open step-by-step tour',
+      'common.stepByStepTour.learnMore': 'Learn more',
+      'common.stepByStepTour.tasks.home.title': 'Try a Learn Dify lesson',
+      'common.stepByStepTour.tasks.home.description': 'Open a hands-on lesson from Learn Dify to see Dify in action.',
+      'common.stepByStepTour.tasks.home.primaryActionLabel': 'Show me',
+      'common.stepByStepTour.tasks.studio.title': 'Manage your apps in Studio',
+      'common.stepByStepTour.tasks.studio.description': 'All your apps live in Studio — edit, organize, and publish them here.',
+      'common.stepByStepTour.tasks.studio.primaryActionLabel': 'Take a look',
+      'common.stepByStepTour.tasks.knowledge.title': 'Add your own data',
+      'common.stepByStepTour.tasks.knowledge.description': 'Build a knowledge base so your apps answer from your documents.',
+      'common.stepByStepTour.tasks.knowledge.primaryActionLabel': 'Take a look',
+      'common.stepByStepTour.tasks.integration.title': 'Explore integrations',
+      'common.stepByStepTour.tasks.integration.description': 'Models, tools, data sources & more — explore what you can connect.',
+      'common.stepByStepTour.tasks.integration.primaryActionLabel': 'Take a look',
+    }),
   }
 })
 
@@ -97,6 +217,26 @@ vi.mock('@/service/client', async (importOriginal) => {
           },
         }
       }
+      if (prop === 'onboarding') {
+        return {
+          stepByStepTour: {
+            state: {
+              get: {
+                queryKey: () => mockStepByStepTour.stateQueryKey,
+                queryOptions: () => ({
+                  queryKey: mockStepByStepTour.stateQueryKey,
+                  queryFn: async () => mockStepByStepTour.state,
+                }),
+              },
+              patch: {
+                mutationOptions: () => ({
+                  mutationFn: mockStepByStepTour.patchState,
+                }),
+              },
+            },
+          },
+        }
+      }
 
       return Reflect.get(target, prop, receiver)
     },
@@ -125,64 +265,8 @@ vi.mock('@langgenius/dify-ui/toast', async (importOriginal) => {
   }
 })
 
-vi.mock('@tanstack/react-hotkeys', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@tanstack/react-hotkeys')>()
-  return {
-    ...actual,
-    useHotkey: (
-      hotkey: string,
-      handler: (event: { preventDefault: () => void }) => void,
-      options?: { ignoreInputs?: boolean },
-    ) => {
-      hotkeyRegistrations.set(hotkey, { handler, options })
-    },
-  }
-})
-
 vi.mock('@/app/components/header/github-star', () => ({
   default: ({ className }: { className?: string }) => <span className={className}>1,234</span>,
-}))
-
-vi.mock('@/app/components/app-sidebar/app-detail-section', () => ({
-  default: ({ expand }: { expand: boolean }) => <div data-testid="app-detail-section" data-expand={expand} />,
-}))
-
-vi.mock('@/app/components/app-sidebar/app-detail-top', () => ({
-  default: ({ expand, onToggle }: { expand: boolean, onToggle: () => void }) => (
-    <div data-testid="app-detail-top" data-expand={expand}>
-      <button type="button" data-testid="app-detail-toggle" onClick={onToggle}>Toggle</button>
-    </div>
-  ),
-}))
-
-vi.mock('@/app/components/app-sidebar/dataset-detail-section', () => ({
-  default: ({ expand }: { expand: boolean }) => <div data-testid="dataset-detail-section" data-expand={expand} />,
-}))
-
-vi.mock('@/app/components/app-sidebar/dataset-detail-top', () => ({
-  default: ({ expand, onToggle }: { expand: boolean, onToggle: () => void }) => (
-    <div data-testid="dataset-detail-top" data-expand={expand}>
-      <button type="button" data-testid="dataset-detail-toggle" onClick={onToggle}>Toggle</button>
-    </div>
-  ),
-}))
-
-vi.mock('@/features/agent-v2/agent-detail/navigation', () => ({
-  AgentDetailSection: ({ expand }: { expand: boolean }) => <div data-testid="agent-detail-section" data-expand={expand} />,
-  AgentDetailTop: ({ expand, onToggle }: { expand: boolean, onToggle: () => void }) => (
-    <div data-testid="agent-detail-top" data-expand={expand}>
-      <button type="button" data-testid="agent-detail-toggle" onClick={onToggle}>Toggle</button>
-    </div>
-  ),
-}))
-
-vi.mock('@/features/deployments/detail/deployment-sidebar', () => ({
-  DeploymentDetailSection: ({ expand }: { expand: boolean }) => <div data-testid="deployment-detail-section" data-expand={expand} />,
-  DeploymentDetailTop: ({ expand, onToggle }: { expand: boolean, onToggle: () => void }) => (
-    <div data-testid="deployment-detail-top" data-expand={expand}>
-      <button type="button" data-testid="deployment-detail-toggle" onClick={onToggle}>Toggle</button>
-    </div>
-  ),
 }))
 
 vi.mock('@/context/i18n', () => ({
@@ -303,6 +387,7 @@ const renderMainNav = (
   const currentAppContext = getMockAppContext() as AppContextValue
   queryClient.setQueryData(consoleQuery.workspaces.current.post.queryKey(), currentAppContext.currentWorkspace)
   queryClient.setQueryData(consoleQuery.workspaces.get.queryKey(), { workspaces: mockWorkspaces })
+  queryClient.setQueryData(mockStepByStepTour.stateQueryKey, mockStepByStepTour.state)
   const resolvedSystemFeatures = {
     ...defaultMainNavSystemFeatures,
     ...systemFeatures,
@@ -313,8 +398,11 @@ const renderMainNav = (
   }
   return renderWithSystemFeatures(
     <JotaiProvider store={options.store}>
-      <MainNav />
-      {options.extra}
+      <StepByStepTourTestUiStateHydrator initialState={mockStepByStepTour.uiState}>
+        <StepByStepTourTestStateObserver onChange={mockStepByStepTour.setObservedState} />
+        <MainNav />
+        {options.extra}
+      </StepByStepTourTestUiStateHydrator>
     </JotaiProvider>,
     { systemFeatures: resolvedSystemFeatures, queryClient },
   )
@@ -336,6 +424,7 @@ describe('MainNav', () => {
       { id: 'workspace-1', name: 'Solar Studio', plan: Plan.team, status: 'normal', created_at: 0, current: true },
       { id: 'workspace-2', name: 'Evan Workspace', plan: Plan.sandbox, status: 'normal', created_at: 0, current: false },
     ]
+    mockStepByStepTour.reset()
     mockIsAgentV2Enabled.mockReturnValue(true)
 
     ;(usePathname as Mock).mockImplementation(() => mockPathname)
@@ -372,8 +461,6 @@ describe('MainNav', () => {
       mutateAsync: mockUpdatePinStatus,
     })
     mockSwitchWorkspace.mockReturnValue(new Promise(() => {}))
-    hotkeyRegistrations.clear()
-    useAppStore.getState().setAppDetail()
   })
 
   it('renders primary navigation with the planned routes', () => {
@@ -384,6 +471,7 @@ describe('MainNav', () => {
     expect(screen.getByRole('link', { name: /common.mainNav.home/ })).toHaveAttribute('href', '/')
     expect(screen.getByRole('link', { name: /common.menus.apps/ })).toHaveAttribute('href', '/apps')
     expect(screen.getByRole('link', { name: /common.menus.roster/ })).toHaveAttribute('href', '/roster')
+    expect(screen.getByRole('link', { name: /common.menus.roster common.menus.status/ })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /common.menus.datasets/ })).toHaveAttribute('href', '/datasets')
     expect(screen.getByRole('link', { name: /common.mainNav.integrations/ })).toHaveAttribute('href', '/integrations/model-provider')
     expect(screen.getByRole('link', { name: /common.mainNav.marketplace/ })).toHaveAttribute('href', '/marketplace')
@@ -419,7 +507,7 @@ describe('MainNav', () => {
     expect(screen.queryByRole('link', { name: /common.menus.deployments/ })).not.toBeInTheDocument()
   })
 
-  it('aligns the global navigation spacing with the main sidebar design', () => {
+  it('aligns the global navigation spacing with the main sidebar design', async () => {
     mockInstalledApps = [createInstalledApp()]
 
     renderMainNav()
@@ -432,7 +520,7 @@ describe('MainNav', () => {
     expect(homeLink.closest('nav')).toHaveClass('isolate', 'flex', 'flex-col', 'gap-px', 'p-2')
     expect(homeLink).toHaveClass('h-8', 'w-full', 'rounded-[10px]', 'px-2', 'py-1.5')
 
-    const webAppsButton = screen.getByRole('button', { name: 'explore.sidebar.webApps' })
+    const webAppsButton = await screen.findByRole('button', { name: 'explore.sidebar.webApps' })
     expect(webAppsButton.parentElement).toHaveClass('py-1', 'pr-2', 'pl-2')
 
     const helpButton = screen.getByRole('button', { name: 'common.mainNav.help.openMenu' })
@@ -472,23 +560,6 @@ describe('MainNav', () => {
 
     expect(screen.queryByText('common.environment.testing')).not.toBeInTheDocument()
     expect(screen.queryByText('common.environment.development')).not.toBeInTheDocument()
-    expect(container.querySelector('.relative.z-30')).not.toBeInTheDocument()
-  })
-
-  it('hides the environment tag when app detail navigation is collapsed', () => {
-    mockPathname = '/app/app-1/overview'
-    ;(useAppContext as Mock).mockReturnValue({
-      ...appContextValue,
-      langGeniusVersionInfo: {
-        ...appContextValue.langGeniusVersionInfo,
-        current_env: 'TESTING',
-      },
-    })
-
-    const { container } = renderMainNav()
-    fireEvent.click(screen.getByTestId('app-detail-toggle'))
-
-    expect(screen.queryByText('common.environment.testing')).not.toBeInTheDocument()
     expect(container.querySelector('.relative.z-30')).not.toBeInTheDocument()
   })
 
@@ -583,162 +654,6 @@ describe('MainNav', () => {
     expect(screen.getByRole('link', { name: /common.mainNav.home/ })).not.toHaveAttribute('aria-current')
   })
 
-  it('hides the main menu on snippet detail routes while keeping account settings available', () => {
-    mockPathname = '/snippets/snippet-1/orchestrate'
-
-    renderMainNav()
-
-    expect(screen.getByRole('complementary')).toHaveClass('w-16')
-    expect(screen.queryByLabelText('Dify')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'common.mainNav.workspace.openMenu' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /common.mainNav.home/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /common.menus.apps/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'explore.sidebar.webApps' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'common.account.account' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'common.mainNav.help.openMenu' })).toBeInTheDocument()
-  })
-
-  it('replaces global navigation with app detail navigation on app routes', () => {
-    mockPathname = '/app/app-1/overview'
-
-    renderMainNav()
-
-    expect(screen.getByTestId('app-detail-top')).toBeInTheDocument()
-    expect(screen.getByTestId('app-detail-section')).toBeInTheDocument()
-    expect(screen.getByTestId('app-detail-top')).toHaveAttribute('data-expand', 'true')
-    expect(screen.getByTestId('app-detail-section')).toHaveAttribute('data-expand', 'true')
-    expect(screen.getByRole('complementary')).toHaveClass('w-[248px]')
-    expect(screen.getByRole('complementary')).toHaveClass('p-1')
-    expect(screen.getByRole('complementary')).toHaveClass('bg-background-body')
-    expect(screen.queryByRole('button', { name: 'common.mainNav.workspace.openMenu' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /common.mainNav.home/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /common.menus.apps/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'explore.sidebar.webApps' })).not.toBeInTheDocument()
-  })
-
-  it('keeps app detail store when rendering app detail navigation', () => {
-    mockPathname = '/app/app-1/logs'
-    useAppStore.getState().setAppDetail({ id: 'app-1' } as ReturnType<typeof useAppStore.getState>['appDetail'])
-
-    renderMainNav()
-
-    expect(useAppStore.getState().appDetail?.id).toBe('app-1')
-  })
-
-  it('clears app detail store after leaving app routes', async () => {
-    mockPathname = '/apps'
-    useAppStore.getState().setAppDetail({ id: 'app-1' } as ReturnType<typeof useAppStore.getState>['appDetail'])
-
-    renderMainNav()
-
-    await waitFor(() => {
-      expect(useAppStore.getState().appDetail).toBeUndefined()
-    })
-  })
-
-  it('collapses app detail navigation from the top-right toggle', () => {
-    mockPathname = '/app/app-1/overview'
-
-    renderMainNav()
-    fireEvent.click(screen.getByTestId('app-detail-toggle'))
-
-    expect(screen.getByRole('complementary')).toHaveClass('w-16')
-    expect(screen.getByRole('complementary')).not.toHaveClass('transition-none')
-    expect(screen.getByRole('complementary')).toHaveClass('p-1')
-    expect(screen.getByTestId('app-detail-top')).toHaveAttribute('data-expand', 'false')
-    expect(screen.getByTestId('app-detail-section')).toHaveAttribute('data-expand', 'false')
-    expect(localStorage.getItem(DETAIL_SIDEBAR_STORAGE_KEY)).toBe('collapse')
-  })
-
-  it('shows app detail navigation as a floating preview when hovering the collapsed top toggle', () => {
-    mockPathname = '/app/app-1/overview'
-
-    renderMainNav()
-    fireEvent.click(screen.getByTestId('app-detail-toggle'))
-    fireEvent.mouseEnter(screen.getByTestId('app-detail-top').parentElement!)
-
-    expect(screen.getByRole('complementary')).toHaveClass('w-16', 'overflow-visible')
-    expect(localStorage.getItem(DETAIL_SIDEBAR_STORAGE_KEY)).toBe('collapse')
-    expect(screen.getAllByTestId('app-detail-top')).toHaveLength(1)
-    expect(screen.getByTestId('app-detail-top')).toHaveAttribute('data-expand', 'true')
-    expect(screen.getByTestId('app-detail-section')).toHaveAttribute('data-expand', 'true')
-  })
-
-  it('persists expanded app detail navigation without width animation when clicking the hovered toggle', () => {
-    mockPathname = '/app/app-1/overview'
-
-    renderMainNav()
-    fireEvent.click(screen.getByTestId('app-detail-toggle'))
-    fireEvent.mouseEnter(screen.getByTestId('app-detail-top').parentElement!)
-    fireEvent.click(screen.getByTestId('app-detail-toggle'))
-
-    expect(screen.getByRole('complementary')).toHaveClass('w-[248px]', 'transition-none')
-    expect(screen.getByRole('complementary')).not.toHaveClass('overflow-visible')
-    expect(screen.getByTestId('app-detail-top')).toHaveAttribute('data-expand', 'true')
-    expect(screen.getByTestId('app-detail-section')).toHaveAttribute('data-expand', 'true')
-    expect(localStorage.getItem(DETAIL_SIDEBAR_STORAGE_KEY)).toBe('expand')
-  })
-
-  it('replaces global navigation with dataset detail navigation on dataset routes', () => {
-    mockPathname = '/datasets/dataset-1/documents'
-
-    renderMainNav()
-
-    expect(screen.getByTestId('dataset-detail-top')).toBeInTheDocument()
-    expect(screen.getByTestId('dataset-detail-section')).toBeInTheDocument()
-    expect(screen.getByTestId('dataset-detail-top')).toHaveAttribute('data-expand', 'true')
-    expect(screen.getByTestId('dataset-detail-section')).toHaveAttribute('data-expand', 'true')
-    expect(screen.getByRole('complementary')).toHaveClass('w-[248px]')
-    expect(screen.getByRole('complementary')).toHaveClass('p-1')
-    expect(screen.getByRole('complementary')).toHaveClass('bg-background-body')
-    expect(screen.queryByRole('button', { name: 'common.mainNav.workspace.openMenu' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /common.mainNav.home/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /common.menus.datasets/ })).not.toBeInTheDocument()
-  })
-
-  it('collapses dataset detail navigation from the top-right toggle', () => {
-    mockPathname = '/datasets/dataset-1/documents'
-
-    renderMainNav()
-    fireEvent.click(screen.getByTestId('dataset-detail-toggle'))
-
-    expect(screen.getByRole('complementary')).toHaveClass('w-16')
-    expect(screen.getByRole('complementary')).toHaveClass('p-1')
-    expect(screen.getByTestId('dataset-detail-top')).toHaveAttribute('data-expand', 'false')
-    expect(screen.getByTestId('dataset-detail-section')).toHaveAttribute('data-expand', 'false')
-    expect(localStorage.getItem(DETAIL_SIDEBAR_STORAGE_KEY)).toBe('collapse')
-  })
-
-  it('shows dataset detail navigation as a floating preview when hovering the collapsed top toggle', () => {
-    mockPathname = '/datasets/dataset-1/documents'
-
-    renderMainNav()
-    fireEvent.click(screen.getByTestId('dataset-detail-toggle'))
-    fireEvent.mouseEnter(screen.getByTestId('dataset-detail-top').parentElement!)
-
-    expect(screen.getByRole('complementary')).toHaveClass('w-16', 'overflow-visible')
-    expect(localStorage.getItem(DETAIL_SIDEBAR_STORAGE_KEY)).toBe('collapse')
-    expect(screen.getAllByTestId('dataset-detail-top')).toHaveLength(1)
-    expect(screen.getByTestId('dataset-detail-top')).toHaveAttribute('data-expand', 'true')
-    expect(screen.getByTestId('dataset-detail-section')).toHaveAttribute('data-expand', 'true')
-  })
-
-  it('replaces global navigation with agent detail navigation on roster detail routes', () => {
-    mockPathname = '/roster/agent/agent-1/configure'
-
-    renderMainNav()
-
-    expect(screen.getByTestId('agent-detail-top')).toBeInTheDocument()
-    expect(screen.getByTestId('agent-detail-section')).toBeInTheDocument()
-    expect(screen.getByTestId('agent-detail-top')).toHaveAttribute('data-expand', 'true')
-    expect(screen.getByTestId('agent-detail-section')).toHaveAttribute('data-expand', 'true')
-    expect(screen.getByRole('complementary')).toHaveClass('w-[248px]')
-    expect(screen.getByRole('complementary')).toHaveClass('p-1')
-    expect(screen.getByRole('complementary')).toHaveClass('bg-background-body')
-    expect(screen.queryByRole('button', { name: 'common.mainNav.workspace.openMenu' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /common.menus.roster/ })).not.toBeInTheDocument()
-  })
-
   it('keeps roster detail navigation hidden when Agent v2 is disabled', () => {
     mockIsAgentV2Enabled.mockReturnValue(false)
     mockPathname = '/roster/agent/agent-1/configure'
@@ -750,47 +665,15 @@ describe('MainNav', () => {
     expect(screen.queryByRole('link', { name: /common.menus.roster/ })).not.toBeInTheDocument()
   })
 
-  it('replaces global navigation with deployment detail navigation on deployment routes', () => {
-    mockPathname = '/deployments/app-instance-1/releases'
-
-    renderMainNav({ branding: { enabled: false }, enable_app_deploy: true })
-
-    expect(screen.getByTestId('deployment-detail-top')).toBeInTheDocument()
-    expect(screen.getByTestId('deployment-detail-section')).toBeInTheDocument()
-    expect(screen.getByTestId('deployment-detail-top')).toHaveAttribute('data-expand', 'true')
-    expect(screen.getByTestId('deployment-detail-section')).toHaveAttribute('data-expand', 'true')
-    expect(screen.getByRole('complementary')).toHaveClass('w-[248px]')
-    expect(screen.getByRole('complementary')).toHaveClass('p-1')
-    expect(screen.getByRole('complementary')).toHaveClass('bg-background-body')
-    expect(screen.queryByRole('button', { name: 'common.mainNav.workspace.openMenu' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /common.mainNav.home/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /common.menus.deployments/ })).not.toBeInTheDocument()
-  })
-
-  it('collapses agent detail navigation from the top-right toggle', () => {
-    mockPathname = '/roster/agent/agent-1/configure'
+  it('keeps MainNav on primary navigation when it is mounted on a detail route', () => {
+    mockPathname = '/app/app-1/overview'
 
     renderMainNav()
-    fireEvent.click(screen.getByTestId('agent-detail-toggle'))
 
-    expect(screen.getByRole('complementary')).toHaveClass('w-16')
-    expect(screen.getByRole('complementary')).toHaveClass('p-1')
-    expect(screen.getByTestId('agent-detail-top')).toHaveAttribute('data-expand', 'false')
-    expect(screen.getByTestId('agent-detail-section')).toHaveAttribute('data-expand', 'false')
-    expect(localStorage.getItem(DETAIL_SIDEBAR_STORAGE_KEY)).toBe('collapse')
-  })
-
-  it('collapses deployment detail navigation from the top-right toggle', () => {
-    mockPathname = '/deployments/app-instance-1/releases'
-
-    renderMainNav({ branding: { enabled: false }, enable_app_deploy: true })
-    fireEvent.click(screen.getByTestId('deployment-detail-toggle'))
-
-    expect(screen.getByRole('complementary')).toHaveClass('w-16')
-    expect(screen.getByRole('complementary')).toHaveClass('p-1')
-    expect(screen.getByTestId('deployment-detail-top')).toHaveAttribute('data-expand', 'false')
-    expect(screen.getByTestId('deployment-detail-section')).toHaveAttribute('data-expand', 'false')
-    expect(localStorage.getItem(DETAIL_SIDEBAR_STORAGE_KEY)).toBe('collapse')
+    expect(screen.queryByTestId('app-detail-top')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('app-detail-section')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'common.mainNav.workspace.openMenu' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /common.menus.apps/ })).toHaveAttribute('href', '/apps')
   })
 
   it.each([
@@ -805,30 +688,6 @@ describe('MainNav', () => {
     expect(screen.queryByTestId('deployment-detail-section')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'common.mainNav.workspace.openMenu' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /common.menus.deployments/ })).toHaveAttribute('href', '/deployments')
-  })
-
-  it('registers the detail navigation shortcut to run while inputs are focused', () => {
-    mockPathname = '/app/app-1/overview'
-
-    renderMainNav()
-
-    expect(hotkeyRegistrations.get('Mod+B')?.options).toEqual(
-      expect.objectContaining({ ignoreInputs: false }),
-    )
-  })
-
-  it('shows agent detail navigation as a floating preview when hovering the collapsed top toggle', () => {
-    mockPathname = '/roster/agent/agent-1/configure'
-
-    renderMainNav()
-    fireEvent.click(screen.getByTestId('agent-detail-toggle'))
-    fireEvent.mouseEnter(screen.getByTestId('agent-detail-top').parentElement!)
-
-    expect(screen.getByRole('complementary')).toHaveClass('w-16', 'overflow-visible')
-    expect(localStorage.getItem(DETAIL_SIDEBAR_STORAGE_KEY)).toBe('collapse')
-    expect(screen.getAllByTestId('agent-detail-top')).toHaveLength(1)
-    expect(screen.getByTestId('agent-detail-top')).toHaveAttribute('data-expand', 'true')
-    expect(screen.getByTestId('agent-detail-section')).toHaveAttribute('data-expand', 'true')
   })
 
   it.each([
@@ -919,6 +778,51 @@ describe('MainNav', () => {
     expect(mockPush).not.toHaveBeenCalled()
   })
 
+  it('shows Step-by-step Tour switch in help menu and stores the current workspace disable override', async () => {
+    renderMainNav({ enable_learn_app: true })
+
+    fireEvent.click(screen.getByRole('button', { name: 'common.mainNav.help.openMenu' }))
+    const stepByStepTourItem = await screen.findByRole('menuitemcheckbox', { name: 'common.mainNav.help.stepByStepTour' })
+    expect(stepByStepTourItem).toHaveAttribute('aria-checked', 'true')
+
+    fireEvent.click(stepByStepTourItem)
+
+    await waitFor(() => {
+      expect(mockStepByStepTour.patchState.mock.calls[0]?.[0]).toEqual({
+        body: { action: 'disable_current_workspace' },
+      })
+      expect(mockStepByStepTour.observedState?.manuallyDisabledWorkspaceIds).toEqual(['workspace-1'])
+    })
+    expect(screen.queryByRole('region', { name: 'Get to know Dify' })).not.toBeInTheDocument()
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+    expect(mockPush).not.toHaveBeenCalled()
+  })
+
+  it('restores the expanded Step-by-step Tour after toggling it off and on again', async () => {
+    renderMainNav({ enable_learn_app: true })
+
+    expect(await screen.findByRole('region', { name: 'Get to know Dify' })).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'common.mainNav.help.openMenu' }))
+    const stepByStepTourItem = await screen.findByRole('menuitemcheckbox', { name: 'common.mainNav.help.stepByStepTour' })
+
+    fireEvent.click(stepByStepTourItem)
+
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: 'Get to know Dify' })).not.toBeInTheDocument()
+    })
+
+    fireEvent.click(stepByStepTourItem)
+
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: 'Get to know Dify' })).toBeVisible()
+    })
+    expect(mockStepByStepTour.patchState.mock.lastCall?.[0]).toEqual({
+      body: { action: 'enable_current_workspace' },
+    })
+    expect(mockStepByStepTour.observedState?.manuallyDisabledWorkspaceIds).toEqual([])
+  })
+
   it('hides Learn Dify switch in help menu when learn app is disabled', async () => {
     renderMainNav({ enable_learn_app: false })
 
@@ -937,6 +841,7 @@ describe('MainNav', () => {
       'common.mainNav.help.docs',
       'common.userProfile.roadmap',
       'common.mainNav.help.learnDify',
+      'common.mainNav.help.stepByStepTour',
       'common.userProfile.compliance',
       'common.userProfile.forum',
       'common.userProfile.community',
@@ -1152,12 +1057,12 @@ describe('MainNav', () => {
     }
   })
 
-  it('collapses and expands installed web apps from the section arrow', () => {
+  it('collapses and expands installed web apps from the section arrow', async () => {
     mockInstalledApps = [createInstalledApp()]
 
     renderMainNav()
 
-    const webAppsButton = screen.getByRole('button', { name: 'explore.sidebar.webApps' })
+    const webAppsButton = await screen.findByRole('button', { name: 'explore.sidebar.webApps' })
     expect(webAppsButton).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByText('Alpha App')).toBeInTheDocument()
 

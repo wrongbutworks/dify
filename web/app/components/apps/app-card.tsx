@@ -39,6 +39,7 @@ import AppIcon from '@/app/components/base/app-icon'
 import StarIcon from '@/app/components/base/icons/src/vender/Star'
 import { UserAvatarList } from '@/app/components/base/user-avatar-list'
 import { buildInstalledAppPath } from '@/app/components/explore/installed-app/routes'
+import { getStepByStepTourDropdownMenuContentProps } from '@/app/components/step-by-step-tour/dropdown-menu'
 import { useSelector as useAppContextSelector } from '@/context/app-context'
 import { useProviderContext } from '@/context/provider-context'
 import { systemFeaturesQueryOptions } from '@/features/system-features/client'
@@ -72,7 +73,7 @@ const SwitchAppModal = dynamic(() => import('@/app/components/app/switch-app-mod
 const DSLExportConfirmModal = dynamic(() => import('@/app/components/workflow/dsl-export-confirm-modal'), {
   ssr: false,
 })
-const AccessControl = dynamic(() => import('@/app/components/app/app-access-control').then(mod => mod.AccessControl), {
+const AccessControl = dynamic(() => import('@/app/components/app/app-access-control'), {
   ssr: false,
 })
 
@@ -90,11 +91,20 @@ const ACCESS_MODE_LABEL_KEYS = {
   [AccessMode.EXTERNAL_MEMBERS]: 'accessItemsDescription.external',
 } as const
 
+const APP_MODES_REQUIRING_PUBLISHED_WORKFLOW_IN_EXPLORE = new Set<AppModeEnum>([
+  AppModeEnum.ADVANCED_CHAT,
+  AppModeEnum.WORKFLOW,
+])
+
 type AppCardProps = {
   app: App
   onlineUsers?: WorkflowOnlineUser[]
   onRefresh?: () => void
   onOpenTagManagement?: () => void
+  stepByStepTourActionMenuOpen?: boolean
+  stepByStepTourCardTarget?: string
+  stepByStepTourCardHighlightPart?: string
+  stepByStepTourActionMenuHighlightPart?: string
 }
 
 type AppAccessModeIconProps = {
@@ -102,6 +112,10 @@ type AppAccessModeIconProps = {
 }
 
 const getAppResourceMaintainer = (app: App) => app.maintainer
+
+function requiresPublishedWorkflowInExplore(app: App) {
+  return APP_MODES_REQUIRING_PUBLISHED_WORKFLOW_IN_EXPLORE.has(app.mode)
+}
 
 function AppAccessModeIcon({ accessMode }: AppAccessModeIconProps) {
   const { t } = useTranslation()
@@ -182,12 +196,17 @@ function AppCardOperationsMenu({
   async function handleOpenInstalledApp(e: MouseEvent<HTMLElement>) {
     e.stopPropagation()
     e.preventDefault()
+    if (requiresPublishedWorkflowInExplore(app) && !app.workflow?.id) {
+      toast.error(t('notPublishedYet', { ns: 'app' }))
+      return
+    }
+
     try {
       await openAsyncWindow(async () => {
         const { installed_apps } = await fetchInstalledAppList(app.id)
         if (installed_apps?.length > 0)
           return `${basePath}${buildInstalledAppPath(installed_apps[0]!.id)}`
-        throw new Error('No app found in Explore')
+        throw new Error(t('notPublishedYet', { ns: 'app' }))
       }, {
         onError: (err) => {
           toast.error(`${err.message || err}`)
@@ -272,10 +291,12 @@ function AppCardOperationsMenuContent(props: AppCardOperationsMenuContentProps) 
     appId: props.app.id,
     enabled: systemFeatures.webapp_auth.enabled,
   })
+  const needsPublishBeforeExplore = requiresPublishedWorkflowInExplore(props.app) && !props.app.workflow?.id
 
   const shouldShowOpenInExploreOption = !props.app.has_draft_trigger
     && (
-      !systemFeatures.webapp_auth.enabled
+      needsPublishBeforeExplore
+      || !systemFeatures.webapp_auth.enabled
       || (!isGettingUserCanAccessApp && Boolean(userCanAccessApp?.result))
     )
 
@@ -292,7 +313,10 @@ type AppCardActionBarProps = {
   onRefresh?: () => void
 }
 
-export function AppCardActionBar({ app, onRefresh }: AppCardActionBarProps) {
+export function AppCardActionBar({
+  app,
+  onRefresh,
+}: AppCardActionBarProps) {
   const { t } = useTranslation()
   const { data: systemFeatures } = useSuspenseQuery(systemFeaturesQueryOptions())
   const currentUserId = useAppContextSelector(state => state.userProfile?.id)
@@ -725,7 +749,16 @@ export function AppCardActionBar({ app, onRefresh }: AppCardActionBarProps) {
   )
 }
 
-export function AppCard({ app, onlineUsers = [], onRefresh, onOpenTagManagement = () => {} }: AppCardProps) {
+export function AppCard({
+  app,
+  onlineUsers = [],
+  onRefresh,
+  onOpenTagManagement = () => {},
+  stepByStepTourActionMenuOpen = false,
+  stepByStepTourCardTarget,
+  stepByStepTourCardHighlightPart,
+  stepByStepTourActionMenuHighlightPart,
+}: AppCardProps) {
   const { t } = useTranslation()
   const { data: systemFeatures } = useSuspenseQuery(systemFeaturesQueryOptions())
   const currentUserId = useAppContextSelector(state => state.userProfile?.id)
@@ -1014,6 +1047,7 @@ export function AppCard({ app, onlineUsers = [], onRefresh, onOpenTagManagement 
   const starActionLabel = app.is_starred
     ? t('studio.unstarApp', { ns: 'app' })
     : t('studio.starApp', { ns: 'app' })
+  const operationsMenuOpen = isOperationsMenuOpen || stepByStepTourActionMenuOpen
   const showPreviewOnlyAccessWarning = useCallback(() => {
     toast.warning(t('noAccessResourcePermission', { ns: 'app' }))
   }, [t])
@@ -1058,11 +1092,20 @@ export function AppCard({ app, onlineUsers = [], onRefresh, onOpenTagManagement 
         </div>
       </div>
       <div className="flex h-[26px] shrink-0 items-start px-3" />
-      <div className="flex min-w-0 shrink-0 items-center pt-2 pr-4 pb-3 pl-4 system-xs-regular text-text-tertiary">
+      <div
+        className={cn(
+          'flex min-w-0 shrink-0 items-center pt-2 pb-3 pl-4 system-xs-regular text-text-tertiary',
+          app.access_mode ? 'pr-9' : 'pr-4',
+        )}
+      >
         <div className="flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap">
-          <div className="truncate">{app.author_name}</div>
-          <div className="shrink-0">·</div>
-          <div className="truncate">{editTimeText}</div>
+          {app.author_name && (
+            <>
+              <div className="min-w-0 truncate">{app.author_name}</div>
+              <div className="shrink-0">·</div>
+            </>
+          )}
+          <div className="shrink-0">{editTimeText}</div>
         </div>
       </div>
     </>
@@ -1075,24 +1118,28 @@ export function AppCard({ app, onlineUsers = [], onRefresh, onOpenTagManagement 
       >
         {isPreviewOnly
           ? (
-              <article
+              <div
                 role="button"
                 tabIndex={0}
                 aria-disabled="true"
                 aria-labelledby={appNameId}
                 aria-describedby={app.description ? appDescriptionId : undefined}
+                data-step-by-step-tour-target={stepByStepTourCardTarget}
+                data-step-by-step-tour-highlight-part={stepByStepTourCardHighlightPart}
                 className={appCardClassName}
                 onClick={showPreviewOnlyAccessWarning}
                 onKeyDown={handlePreviewOnlyCardKeyDown}
               >
                 {appCardContent}
-              </article>
+              </div>
             )
           : (
               <Link
                 href={appHref}
                 aria-labelledby={appNameId}
                 aria-describedby={app.description ? appDescriptionId : undefined}
+                data-step-by-step-tour-target={stepByStepTourCardTarget}
+                data-step-by-step-tour-highlight-part={stepByStepTourCardHighlightPart}
                 className={appCardClassName}
               >
                 {appCardContent}
@@ -1100,10 +1147,6 @@ export function AppCard({ app, onlineUsers = [], onRefresh, onOpenTagManagement 
             )}
         <div
           className="absolute top-[104px] right-3 left-3 flex h-[26px] min-w-0 items-start"
-          onClick={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-          }}
         >
           <AppCardTags
             appId={app.id}
@@ -1118,7 +1161,7 @@ export function AppCard({ app, onlineUsers = [], onRefresh, onOpenTagManagement 
           <div
             className={cn(
               'absolute top-2 right-2 flex items-center overflow-hidden rounded-[10px] border-[0.5px] border-components-actionbar-border bg-components-actionbar-bg p-0.5 shadow-lg backdrop-blur-xs transition-opacity',
-              isOperationsMenuOpen
+              operationsMenuOpen
                 ? 'pointer-events-auto opacity-100'
                 : 'pointer-events-none opacity-0 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100',
             )}
@@ -1146,12 +1189,12 @@ export function AppCard({ app, onlineUsers = [], onRefresh, onOpenTagManagement 
               <TooltipContent>{starActionLabel}</TooltipContent>
             </Tooltip>
             {shouldShowOperationsMenu && (
-              <DropdownMenu modal={false} open={isOperationsMenuOpen} onOpenChange={setIsOperationsMenuOpen}>
+              <DropdownMenu modal={false} open={operationsMenuOpen} onOpenChange={setIsOperationsMenuOpen}>
                 <DropdownMenuTrigger
                   aria-label={t('operation.more', { ns: 'common' })}
                   className={cn(
                     'flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg focus-visible:ring-2 focus-visible:ring-state-accent-solid focus-visible:outline-hidden',
-                    isOperationsMenuOpen ? 'bg-state-base-hover' : 'hover:bg-state-base-hover',
+                    operationsMenuOpen ? 'bg-state-base-hover' : 'hover:bg-state-base-hover',
                   )}
                   onClick={(e) => {
                     e.stopPropagation()
@@ -1164,7 +1207,11 @@ export function AppCard({ app, onlineUsers = [], onRefresh, onOpenTagManagement 
                 <DropdownMenuContent
                   placement="bottom-end"
                   sideOffset={4}
-                  popupClassName={operationsMenuWidthClassName}
+                  {...getStepByStepTourDropdownMenuContentProps({
+                    highlightPart: stepByStepTourActionMenuHighlightPart,
+                    popupClassName: operationsMenuWidthClassName,
+                    presentationOnly: stepByStepTourActionMenuOpen,
+                  })}
                 >
                   {systemFeatures.webapp_auth.enabled
                     ? (

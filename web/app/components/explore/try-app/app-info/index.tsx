@@ -12,8 +12,10 @@ import useGetRequirements from './use-get-requirements'
 type Props = Readonly<{
   appId: string
   appDetail: TryAppInfo
+  canCreate?: boolean
   categories?: string[]
   className?: string
+  createButtonStepByStepTourTarget?: string
   onCreate: () => void
 }>
 
@@ -51,8 +53,10 @@ const RequirementIcon: FC<RequirementIconProps> = ({ iconUrl }) => {
 
 const AppInfo: FC<Props> = ({
   appId,
+  canCreate = true,
   className,
   categories,
+  createButtonStepByStepTourTarget,
   appDetail,
   onCreate,
 }) => {
@@ -68,9 +72,9 @@ const AppInfo: FC<Props> = ({
           <AppIcon
             size="large"
             iconType={appDetail.site.icon_type}
-            icon={appDetail.site.icon}
-            background={appDetail.site.icon_background}
-            imageUrl={appDetail.site.icon_url}
+            icon={appDetail.site.icon ?? undefined}
+            background={appDetail.site.icon_background ?? undefined}
+            imageUrl={appDetail.site.icon_url ?? undefined}
           />
           <AppTypeIcon
             wrapperClassName="absolute -bottom-0.5 -right-0.5 w-4 h-4 shadow-sm"
@@ -94,10 +98,17 @@ const AppInfo: FC<Props> = ({
       {appDetail.description && (
         <div className="mt-[14px] shrink-0 system-sm-regular text-text-secondary">{appDetail.description}</div>
       )}
-      <Button variant="primary" className="mt-3 flex w-full max-w-full" onClick={onCreate}>
-        <span className="mr-1 i-ri-add-line size-4 shrink-0" />
-        <span className="truncate">{t('tryApp.createFromSampleApp', { ns: 'explore' })}</span>
-      </Button>
+      {canCreate && (
+        <Button
+          variant="primary"
+          className="mt-3 flex w-full max-w-full"
+          data-step-by-step-tour-target={createButtonStepByStepTourTarget}
+          onClick={onCreate}
+        >
+          <span className="mr-1 i-ri-add-line size-4 shrink-0" />
+          <span className="truncate">{t('tryApp.createFromSampleApp', { ns: 'explore' })}</span>
+        </Button>
+      )}
 
       {visibleCategories.length > 0 && (
         <div className="mt-6 shrink-0">

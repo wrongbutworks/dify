@@ -3,6 +3,7 @@ import type { ModelProvider } from './declarations'
 import type { PluginDetail } from '@/app/components/plugins/types'
 import { Trans, useTranslation } from 'react-i18next'
 import { SkeletonContainer, SkeletonRectangle, SkeletonRow } from '@/app/components/base/skeleton'
+import { STEP_BY_STEP_TOUR_TARGETS } from '@/app/components/step-by-step-tour/target-registry'
 import { IS_CLOUD_EDITION } from '@/config'
 import InstallFromMarketplace from './install-from-marketplace'
 import ProviderAddedCard from './provider-added-card'
@@ -21,6 +22,7 @@ type ModelProviderPageBodyProps = {
   enableMarketplace: boolean
   searchText: string
   pluginDetailMap: Map<string, PluginDetail>
+  onOpenMarketplace?: () => void
 }
 
 function ModelProviderCardSkeleton() {
@@ -58,13 +60,15 @@ function ModelProviderListSkeleton() {
 
 function EmptyProviderState({
   enableMarketplace,
+  stepByStepTourTarget,
 }: {
   enableMarketplace: boolean
+  stepByStepTourTarget?: string
 }) {
   const { t } = useTranslation()
 
   return (
-    <div className="rounded-[10px] bg-workflow-process-bg p-4">
+    <div className="rounded-[10px] bg-workflow-process-bg p-4" data-step-by-step-tour-target={stepByStepTourTarget}>
       <div className="flex h-10 w-10 items-center justify-center rounded-[10px] border-[0.5px] border-components-card-border bg-components-card-bg shadow-lg backdrop-blur-sm">
         <span aria-hidden className="i-ri-brain-2-line size-5 text-text-primary" />
       </div>
@@ -79,8 +83,11 @@ function EmptyProviderState({
                   marketplace: (
                     <a
                       href="#model-provider-marketplace"
+                      aria-label={t('marketplace.difyMarketplace', { ns: 'plugin' })}
                       className="system-xs-medium text-text-accent hover:underline"
-                    />
+                    >
+                      {t('mainNav.marketplace', { ns: 'common' })}
+                    </a>
                   ),
                 }}
               />
@@ -92,25 +99,31 @@ function EmptyProviderState({
 }
 
 type ProviderCardListProps = {
+  firstCardTarget?: string
   providers: ModelProvider[]
   pluginDetailMap: Map<string, PluginDetail>
   notConfigured?: boolean
 }
 
 function ProviderCardList({
+  firstCardTarget,
   providers,
   pluginDetailMap,
   notConfigured,
 }: ProviderCardListProps) {
   return (
     <div className="relative flex flex-col gap-2">
-      {providers.map(provider => (
-        <ProviderAddedCard
+      {providers.map((provider, index) => (
+        <div
           key={provider.provider}
-          notConfigured={notConfigured}
-          provider={provider}
-          pluginDetail={pluginDetailMap.get(providerToPluginId(provider.provider))}
-        />
+          data-step-by-step-tour-target={index === 0 ? firstCardTarget : undefined}
+        >
+          <ProviderAddedCard
+            notConfigured={notConfigured}
+            provider={provider}
+            pluginDetail={pluginDetailMap.get(providerToPluginId(provider.provider))}
+          />
+        </div>
       ))}
     </div>
   )
@@ -128,13 +141,14 @@ const ModelProviderPageBody: FC<ModelProviderPageBodyProps> = ({
   enableMarketplace,
   searchText,
   pluginDetailMap,
+  onOpenMarketplace,
 }) => {
   const { t } = useTranslation()
 
   return (
     <div className="flex flex-col gap-2">
       {IS_CLOUD_EDITION && (
-        <div>
+        <div data-step-by-step-tour-target={STEP_BY_STEP_TOUR_TARGETS.integrationModelProviderCredits}>
           <QuotaPanel providers={providers} />
         </div>
       )}
@@ -143,9 +157,15 @@ const ModelProviderPageBody: FC<ModelProviderPageBodyProps> = ({
           <ModelProviderListSkeleton />
         </div>
       )}
-      {showEmptyProvider && <EmptyProviderState enableMarketplace={enableMarketplace} />}
+      {showEmptyProvider && (
+        <EmptyProviderState
+          enableMarketplace={enableMarketplace}
+          stepByStepTourTarget={!showConfiguredProviders && !showNotConfiguredProviders ? STEP_BY_STEP_TOUR_TARGETS.integrationModelProviderProduction : undefined}
+        />
+      )}
       {showConfiguredProviders && (
         <ProviderCardList
+          firstCardTarget={STEP_BY_STEP_TOUR_TARGETS.integrationModelProviderProduction}
           providers={filteredConfiguredProviders}
           pluginDetailMap={pluginDetailMap}
         />
@@ -155,6 +175,7 @@ const ModelProviderPageBody: FC<ModelProviderPageBodyProps> = ({
           <div className="flex h-5 items-center system-md-semibold text-text-primary">{t('modelProvider.toBeConfigured', { ns: 'common' })}</div>
           <ProviderCardList
             notConfigured
+            firstCardTarget={!showConfiguredProviders ? STEP_BY_STEP_TOUR_TARGETS.integrationModelProviderProduction : undefined}
             providers={filteredNotConfiguredProviders}
             pluginDetailMap={pluginDetailMap}
           />
@@ -165,6 +186,8 @@ const ModelProviderPageBody: FC<ModelProviderPageBodyProps> = ({
           <InstallFromMarketplace
             providers={providers}
             searchText={searchText}
+            onOpenMarketplace={onOpenMarketplace}
+            stepByStepTourTarget={STEP_BY_STEP_TOUR_TARGETS.integrationModelProviderInstall}
           />
         </div>
       )}

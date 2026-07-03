@@ -1,18 +1,26 @@
 'use client'
 
-import type { AppListQuery, AppListSortBy } from '@/contract/console/apps'
+import type { GetAppsData } from '@dify/contracts/api/console/apps/types.gen'
 import { cn } from '@langgenius/dify-ui/cn'
 import { keepPreviousData, useInfiniteQuery, useQuery, useSuspenseQuery } from '@tanstack/react-query'
 import { useDebounce } from 'ahooks'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNeedRefreshAppList } from '@/app/components/apps/storage'
+import {
+  useSetStepByStepTourAccountState,
+  useStepByStepTourAccountStateValue,
+} from '@/app/components/step-by-step-tour/storage'
+import {
+  getStepByStepTourGuides,
+  STEP_BY_STEP_TOUR_TARGETS,
+} from '@/app/components/step-by-step-tour/target-registry'
 import { useAppContext } from '@/context/app-context'
 import { useProviderContext } from '@/context/provider-context'
 import { systemFeaturesQueryOptions } from '@/features/system-features/client'
 import { CheckModal } from '@/hooks/use-pay'
-import { usePathname, useRouter, useSearchParams } from '@/next/navigation'
 import { consoleQuery } from '@/service/client'
+import { normalizeAppPagination } from '@/service/use-apps'
 import { AppModeEnum } from '@/types/app'
 import { hasPermission } from '@/utils/permission'
 import { AppCard } from './app-card'
@@ -30,6 +38,10 @@ import { StarredAppList } from './starred-app-list'
 import { StudioListHeader } from './studio-list-header'
 
 const STARRED_APP_LIMIT = 100
+const STEP_BY_STEP_TOUR_APP_ROW_CARD_COUNT = 4
+
+type AppListQuery = NonNullable<GetAppsData['query']>
+type AppListSortBy = NonNullable<AppListQuery['sort_by']>
 
 type Props = Readonly<{
   controlRefreshList?: number
@@ -42,9 +54,6 @@ function List({
   const { data: systemFeatures } = useSuspenseQuery(systemFeaturesQueryOptions())
   const { workspacePermissionKeys } = useAppContext()
   const { onPlanInfoChanged } = useProviderContext()
-  const searchParams = useSearchParams()
-  const pathname = usePathname()
-  const { replace } = useRouter()
 
   // eslint-disable-next-line react/use-state -- custom URL query hook, not React.useState
   const {
@@ -63,6 +72,10 @@ function List({
   const [showCreateFromDSLModal, setShowCreateFromDSLModal] = useState(false)
   const [droppedDSLFile, setDroppedDSLFile] = useState<File | undefined>()
   const [needsRefreshAppList, setNeedsRefreshAppList] = useNeedRefreshAppList()
+  // eslint-disable-next-line react/use-state -- Step-by-step tour storage hooks are not React useState calls.
+  const stepByStepTourAccountState = useStepByStepTourAccountStateValue()
+  // eslint-disable-next-line react/use-state -- Step-by-step tour storage hooks are not React useState calls.
+  const setStepByStepTourAccountState = useSetStepByStepTourAccountState()
   const canCreateApp = hasPermission(workspacePermissionKeys, 'app.create_and_management')
 
   const handleDSLFileDropped = useCallback((file: File) => {
@@ -78,16 +91,6 @@ function List({
     containerRef,
     enabled: canCreateApp,
   })
-
-  useEffect(() => {
-    if (!searchParams.has('tagIDs'))
-      return
-
-    const params = new URLSearchParams(searchParams.toString())
-    params.delete('tagIDs')
-    const query = params.toString()
-    replace(query ? `${pathname}?${query}` : pathname, { scroll: false })
-  }, [pathname, replace, searchParams])
 
   const appListQuery = useMemo<AppListQuery>(() => ({
     page: 1,
@@ -109,7 +112,7 @@ function List({
     error,
     refetch,
   } = useInfiniteQuery({
-    ...consoleQuery.apps.list.infiniteOptions({
+    ...consoleQuery.apps.get.infiniteOptions({
       input: pageParam => ({
         query: {
           ...appListQuery,
@@ -119,6 +122,10 @@ function List({
       getNextPageParam: lastPage => lastPage.has_more ? lastPage.page + 1 : undefined,
       initialPageParam: 1,
       placeholderData: keepPreviousData,
+    }),
+    select: data => ({
+      ...data,
+      pages: data.pages.map(normalizeAppPagination),
     }),
     refetchInterval: systemFeatures.enable_collaboration_mode ? 10000 : false,
   })
@@ -133,10 +140,11 @@ function List({
     data: starredAppList,
     refetch: refetchStarredAppList,
   } = useQuery({
-    ...consoleQuery.apps.starredList.queryOptions({
+    ...consoleQuery.apps.starred.get.queryOptions({
       input: {
         query: starredAppListQuery,
       },
+      select: normalizeAppPagination,
     }),
   })
 
@@ -211,6 +219,24 @@ function List({
   const hasActiveFilters = category !== 'all' || tagIDs.length > 0 || keywords.trim().length > 0 || debouncedKeywords.trim().length > 0 || creatorIDs.length > 0
   const showSkeleton = isLoading || (isFetching && pages.length === 0)
   const showFirstEmptyState = !showSkeleton && !hasAnyApp && canCreateApp && hasResolvedFirstPage && !hasActiveFilters
+  const showNoCreateEmptyState = !showSkeleton && !hasAnyApp && !canCreateApp && hasResolvedFirstPage && !hasActiveFilters
+  const activeStudioGuideGroup = canCreateApp
+    ? showFirstEmptyState
+      ? 'studioEmpty'
+      : hasAnyApp ? 'studioWithApps' : undefined
+    : hasAnyApp
+      ? 'studioNoCreateWithApps'
+      : showNoCreateEmptyState ? 'studioNoCreateEmpty' : undefined
+  const effectiveActiveStudioGuideGroup = stepByStepTourAccountState.activeGuideGroup ?? activeStudioGuideGroup
+  const activeStudioGuides = stepByStepTourAccountState.activeTaskId === 'studio' && effectiveActiveStudioGuideGroup
+    ? getStepByStepTourGuides('studio', effectiveActiveStudioGuideGroup)
+    : []
+  const activeStudioGuide = activeStudioGuides[stepByStepTourAccountState.activeGuideIndex ?? 0]
+  const shouldOpenStepByStepTourCreateMenu = activeStudioGuide?.target === STEP_BY_STEP_TOUR_TARGETS.studioWithAppsCreate
+  const shouldOpenStepByStepTourAppCardActionMenu = activeStudioGuide?.target === STEP_BY_STEP_TOUR_TARGETS.studioWithAppsFirstAppCard
+  const shouldHighlightStepByStepTourNoCreateAppRow = activeStudioGuide?.target === STEP_BY_STEP_TOUR_TARGETS.studioNoCreateFirstAppCard
+  const shouldHighlightStepByStepTourStarredAppRow = shouldHighlightStepByStepTourNoCreateAppRow && starredApps.length > 0
+  const shouldHighlightStepByStepTourAllAppsRow = shouldHighlightStepByStepTourNoCreateAppRow && !shouldHighlightStepByStepTourStarredAppRow
   const openCreateBlankModal = useCallback(() => {
     if (canCreateApp)
       setShowNewAppModal(true)
@@ -223,6 +249,30 @@ function List({
     if (canCreateApp)
       setShowCreateFromDSLModal(true)
   }, [canCreateApp])
+
+  useEffect(() => {
+    if (stepByStepTourAccountState.activeTaskId !== 'studio')
+      return
+    if (!hasResolvedFirstPage || showSkeleton || !activeStudioGuideGroup)
+      return
+    if (stepByStepTourAccountState.activeGuideGroup === activeStudioGuideGroup)
+      return
+
+    // Sync the active walkthrough branch into the tour storage owner after the
+    // Studio list data resolves.
+    // eslint-disable-next-line react/set-state-in-effect
+    setStepByStepTourAccountState({
+      ...stepByStepTourAccountState,
+      activeGuideGroup: activeStudioGuideGroup,
+      activeGuideIndex: 0,
+    })
+  }, [
+    activeStudioGuideGroup,
+    hasResolvedFirstPage,
+    setStepByStepTourAccountState,
+    showSkeleton,
+    stepByStepTourAccountState,
+  ])
 
   return (
     <>
@@ -255,6 +305,9 @@ function List({
             onImportDSL={openCreateFromDSLModal}
             onOpenTagManagement={() => setShowTagManagementModal(true)}
             showCreateButton={canCreateApp}
+            stepByStepTourCreateMenuOpen={activeStudioGuide ? shouldOpenStepByStepTourCreateMenu : undefined}
+            stepByStepTourCreateMenuTarget={STEP_BY_STEP_TOUR_TARGETS.studioWithAppsCreate}
+            stepByStepTourCreateMenuHighlightPart={STEP_BY_STEP_TOUR_TARGETS.studioWithAppsCreateMenu}
           />
         </StudioListHeader>
         {showFirstEmptyState
@@ -272,6 +325,9 @@ function List({
                   <StarredAppList
                     apps={starredApps}
                     onRefresh={refreshAppLists}
+                    stepByStepTourCardTarget={shouldHighlightStepByStepTourStarredAppRow ? STEP_BY_STEP_TOUR_TARGETS.studioNoCreateFirstAppCard : undefined}
+                    stepByStepTourCardHighlightPart={shouldHighlightStepByStepTourStarredAppRow ? STEP_BY_STEP_TOUR_TARGETS.studioNoCreateFirstAppRowCard : undefined}
+                    stepByStepTourHighlightedCardCount={shouldHighlightStepByStepTourStarredAppRow ? STEP_BY_STEP_TOUR_APP_ROW_CARD_COUNT : 0}
                   />
                 )}
                 <div className={cn(
@@ -282,16 +338,24 @@ function List({
                   {showSkeleton
                     ? <AppCardSkeleton count={6} />
                     : hasAnyApp
-                      ? apps.map(app => (
+                      ? apps.map((app, index) => (
                           <AppCard
                             key={app.id}
                             app={app}
                             onlineUsers={workflowOnlineUsersMap[app.id] ?? []}
                             onRefresh={refreshAppLists}
                             onOpenTagManagement={() => setShowTagManagementModal(true)}
+                            stepByStepTourActionMenuOpen={index === 0 ? shouldOpenStepByStepTourAppCardActionMenu : undefined}
+                            stepByStepTourCardTarget={index === 0
+                              ? shouldHighlightStepByStepTourAllAppsRow
+                                ? STEP_BY_STEP_TOUR_TARGETS.studioNoCreateFirstAppCard
+                                : canCreateApp ? STEP_BY_STEP_TOUR_TARGETS.studioWithAppsFirstAppCard : undefined
+                              : undefined}
+                            stepByStepTourCardHighlightPart={index < STEP_BY_STEP_TOUR_APP_ROW_CARD_COUNT && shouldHighlightStepByStepTourAllAppsRow ? STEP_BY_STEP_TOUR_TARGETS.studioNoCreateFirstAppRowCard : undefined}
+                            stepByStepTourActionMenuHighlightPart={index === 0 && shouldOpenStepByStepTourAppCardActionMenu ? STEP_BY_STEP_TOUR_TARGETS.studioWithAppsFirstAppCardActionsMenu : undefined}
                           />
                         ))
-                      : <Empty />}
+                      : <Empty stepByStepTourTarget={showNoCreateEmptyState ? STEP_BY_STEP_TOUR_TARGETS.studioNoCreateEmpty : undefined} />}
                   {isFetchingNextPage && (
                     <AppCardSkeleton count={3} />
                   )}
