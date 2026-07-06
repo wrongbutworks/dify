@@ -207,7 +207,10 @@ class PipelineRunner(WorkflowBasedAppRunner):
 
         for event in generator:
             self._update_document_status(
-                event, self.application_generate_entity.document_id, self.application_generate_entity.dataset_id
+                event,
+                self.application_generate_entity.document_id,
+                self.application_generate_entity.dataset_id,
+                workflow.tenant_id,
             )
             self._handle_event(workflow_entry, event)
 
@@ -295,15 +298,23 @@ class PipelineRunner(WorkflowBasedAppRunner):
 
         return graph
 
-    def _update_document_status(self, event: GraphEngineEvent, document_id: str | None, dataset_id: str | None) -> None:
+    def _update_document_status(
+        self, event: GraphEngineEvent, document_id: str | None, dataset_id: str | None, tenant_id: str | None
+    ) -> None:
         """
         Update document status
         """
         if isinstance(event, GraphRunFailedEvent):
-            if document_id and dataset_id:
+            if document_id and dataset_id and tenant_id:
                 with create_session() as session, session.begin():
                     document = session.scalar(
-                        select(Document).where(Document.id == document_id, Document.dataset_id == dataset_id).limit(1)
+                        select(Document)
+                        .where(
+                            Document.id == document_id,
+                            Document.dataset_id == dataset_id,
+                            Document.tenant_id == tenant_id,
+                        )
+                        .limit(1)
                     )
                     if document:
                         document.indexing_status = "error"

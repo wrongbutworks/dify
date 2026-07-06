@@ -147,14 +147,29 @@ def test_update_document_status_on_failure(mocker, runner):
 
     event = GraphRunFailedEvent(error="boom")
 
-    runner._update_document_status(event, document_id="doc", dataset_id="ds")
+    runner._update_document_status(event, document_id="doc", dataset_id="ds", tenant_id="tenant")
 
+    statement = session.scalar.call_args.args[0]
+    assert "documents.tenant_id" in str(statement)
+    assert "tenant" in statement.compile().params.values()
     assert document.indexing_status == "error"
     assert document.error == "boom"
     session.add.assert_called_once_with(document)
     session.begin.assert_called_once()
     session.begin.return_value.__enter__.assert_called_once()
     session.begin.return_value.__exit__.assert_called_once()
+
+
+def test_update_document_status_skips_when_document_not_found(mocker, runner):
+    session = MagicMock()
+    session.scalar.return_value = None
+    _patch_create_session(mocker, session)
+
+    runner._update_document_status(
+        GraphRunFailedEvent(error="boom"), document_id="doc", dataset_id="ds", tenant_id="tenant"
+    )
+
+    session.add.assert_not_called()
 
 
 def test_run_pipeline_not_found(mocker: MockerFixture):
