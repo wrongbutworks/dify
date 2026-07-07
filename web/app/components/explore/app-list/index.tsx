@@ -77,7 +77,7 @@ function getExploreAppListQueryOptions(locale?: string) {
   const language = input.query?.language
 
   return queryOptions<ExploreAppListData>({
-    queryKey: [...consoleQuery.explore.apps.queryKey({ input }), language],
+    queryKey: [...consoleQuery.explore.apps.get.queryKey({ input }), language],
     queryFn: async () => {
       const { categories, recommended_apps } = await fetchAppList(language)
       return {
@@ -100,7 +100,7 @@ function getBannersQueryOptions(locale?: string) {
   const language = input.query?.language
 
   return queryOptions<BannerType[]>({
-    queryKey: [...consoleQuery.explore.banners.queryKey({ input }), language],
+    queryKey: [...consoleQuery.explore.banners.get.queryKey({ input }), language],
     queryFn: () => fetchBanners(language),
   })
 }
@@ -316,6 +316,10 @@ const Apps = ({ onSuccess }: { onSuccess?: () => void }) => {
       return
 
     abandonHomeTour()
+    setCurrentTryApp(undefined)
+    setCurrApp(null)
+    currentCreateAppTrackingRef.current = null
+    currentCreateAppModeRef.current = null
     isCurrentTryAppFromLearnDifyRef.current = false
     shouldCompleteHomeTourOnCreateRef.current = false
   }, [abandonHomeTour])
@@ -402,9 +406,11 @@ const Apps = ({ onSuccess }: { onSuccess?: () => void }) => {
       isSubmittingHomeTourCreateRef.current = shouldCompleteHomeTourOnCreateRef.current
       hideTryAppPanel()
 
-      const { export_data, mode } = await fetchAppDetail(
-        currApp?.app.id as string,
-      )
+      const appId = currApp?.app.id
+      if (!appId)
+        return
+
+      const { export_data, mode } = await fetchAppDetail(appId)
       currentCreateAppModeRef.current = mode
       const payload = {
         mode: DSLImportMode.YAML_CONTENT,
@@ -427,6 +433,7 @@ const Apps = ({ onSuccess }: { onSuccess?: () => void }) => {
           didTransitionCreateFlow = true
           setShowDSLConfirmModal(true)
         },
+        skipRedirectOnSuccess: shouldCompleteHomeTourOnCreateRef.current,
       })
       if (!didTransitionCreateFlow && shouldCompleteHomeTourOnCreateRef.current) {
         isSubmittingHomeTourCreateRef.current = false
@@ -443,6 +450,7 @@ const Apps = ({ onSuccess }: { onSuccess?: () => void }) => {
         completeHomeTourAfterCreate()
         onSuccess?.()
       },
+      skipRedirectOnSuccess: shouldCompleteHomeTourOnCreateRef.current,
     })
   }, [completeHomeTourAfterCreate, handleImportDSLConfirm, onSuccess, trackCurrentCreateApp])
 

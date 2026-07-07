@@ -13,6 +13,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { useSetNeedRefreshAppList } from '@/app/components/apps/storage'
 import { usePluginDependencies } from '@/app/components/workflow/plugin-dependency/hooks'
+import { useAppContext } from '@/context/app-context'
 import { systemFeaturesQueryOptions } from '@/features/system-features/client'
 import { DSLImportStatus } from '@/models/app'
 import { useRouter } from '@/next/navigation'
@@ -37,6 +38,7 @@ type ResponseCallback = {
   onSuccess?: (payload: DSLImportResponse) => void
   onPending?: (payload: DSLImportResponse) => void
   onFailed?: () => void
+  skipRedirectOnSuccess?: boolean
 }
 export const useImportDSL = () => {
   const { t } = useTranslation()
@@ -45,6 +47,7 @@ export const useImportDSL = () => {
   const { push } = useRouter()
   const invalidateAppList = useInvalidateAppList()
   const { data: systemFeatures } = useSuspenseQuery(systemFeaturesQueryOptions())
+  const { userProfile, workspacePermissionKeys } = useAppContext()
   const isRbacEnabled = systemFeatures.rbac_enabled
   const [versions, setVersions] = useState<{ importedVersion: string, systemVersion: string }>()
   const importIdRef = useRef<string>('')
@@ -56,6 +59,7 @@ export const useImportDSL = () => {
       onSuccess,
       onPending,
       onFailed,
+      skipRedirectOnSuccess,
     }: ResponseCallback,
   ) => {
     if (isFetching)
@@ -95,7 +99,14 @@ export const useImportDSL = () => {
         setNeedRefresh('1')
         invalidateAppList()
         await handleCheckPluginDependencies(app_id)
-        getRedirection({ id: app_id, mode: app_mode, permission_keys }, push, { isRbacEnabled })
+        if (!skipRedirectOnSuccess) {
+          getRedirection({ id: app_id, mode: app_mode, permission_keys }, push, {
+            currentUserId: userProfile?.id,
+            resourceMaintainer: userProfile?.id,
+            workspacePermissionKeys,
+            isRbacEnabled,
+          })
+        }
       }
       else if (status === DSLImportStatus.PENDING) {
         setVersions({
@@ -117,13 +128,14 @@ export const useImportDSL = () => {
     finally {
       setIsFetching(false)
     }
-  }, [isFetching, t, handleCheckPluginDependencies, isRbacEnabled, push, setNeedRefresh, invalidateAppList])
+  }, [isFetching, t, handleCheckPluginDependencies, isRbacEnabled, push, setNeedRefresh, invalidateAppList, userProfile?.id, workspacePermissionKeys])
 
   const handleImportDSLConfirm = useCallback(async (
     {
       onSuccess,
       onFailed,
-    }: Pick<ResponseCallback, 'onSuccess' | 'onFailed'>,
+      skipRedirectOnSuccess,
+    }: Pick<ResponseCallback, 'onSuccess' | 'onFailed' | 'skipRedirectOnSuccess'>,
   ) => {
     if (isFetching)
       return
@@ -146,7 +158,14 @@ export const useImportDSL = () => {
         await handleCheckPluginDependencies(app_id)
         setNeedRefresh('1')
         invalidateAppList()
-        getRedirection({ id: app_id, mode: app_mode, permission_keys }, push, { isRbacEnabled })
+        if (!skipRedirectOnSuccess) {
+          getRedirection({ id: app_id, mode: app_mode, permission_keys }, push, {
+            currentUserId: userProfile?.id,
+            resourceMaintainer: userProfile?.id,
+            workspacePermissionKeys,
+            isRbacEnabled,
+          })
+        }
       }
       else if (status === DSLImportStatus.FAILED) {
         toast.error(t('newApp.appCreateFailed', { ns: 'app' }))
@@ -160,7 +179,7 @@ export const useImportDSL = () => {
     finally {
       setIsFetching(false)
     }
-  }, [isFetching, t, handleCheckPluginDependencies, isRbacEnabled, setNeedRefresh, push, invalidateAppList])
+  }, [isFetching, t, handleCheckPluginDependencies, isRbacEnabled, setNeedRefresh, push, invalidateAppList, userProfile?.id, workspacePermissionKeys])
 
   return {
     handleImportDSL,
